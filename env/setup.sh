@@ -12,6 +12,12 @@ source "$(dirname "$0")/../scripts/common.sh"
 NO_GPU=0
 [[ "${1:-}" == "--no-gpu" ]] && NO_GPU=1
 
+if [[ "$RS_ROOT" == /mnt/* ]]; then
+  die "repo is on a Windows drive ($RS_ROOT). Under WSL, clone into the Linux filesystem instead,
+  e.g.  cd ~ && git clone --recursive https://github.com/stanzixinwan/rpent-sched.git
+  (/mnt/* breaks git file modes and line endings, and is much slower for pip and MuJoCo)"
+fi
+
 command -v uv >/dev/null || die "uv not found: curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 log "submodules (RPent pinned at $(git -C third_party/RPent rev-parse --short HEAD 2>/dev/null || echo '?'))"

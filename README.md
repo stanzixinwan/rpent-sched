@@ -21,6 +21,10 @@ RPent is pinned as a submodule (`third_party/RPent`, commit `ef70215`) and is
 
 ## Quick start
 
+Under WSL2, clone into the Linux filesystem (e.g. `~/rpent-sched`), **not** under
+`/mnt/c` or `/mnt/d`: Windows drives break git's file modes and line endings
+(the RPent submodule checkout fails) and are much slower.
+
 Requirements: Linux (or WSL2 Ubuntu) with an NVIDIA GPU and CUDA 12 driver,
 `git`, a C/C++ toolchain, and [uv](https://docs.astral.sh/uv/). A planner API
 key (Anthropic for `claude_code`, OpenAI for `codex`).
