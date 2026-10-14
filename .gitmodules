@@ -1,0 +1,3 @@
+[submodule "third_party/RPent"]
+	path = third_party/RPent
+	url = https://github.com/RLinf/RPent

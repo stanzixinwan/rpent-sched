@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsched"
+version = "0.1.0"
+description = "Tracing and tool-context-aware scheduling for concurrent RPent embodied agents"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "pyyaml>=6",
+    "numpy",
+    "pandas>=2",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+gpu = ["nvidia-ml-py>=12"]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["rsched"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

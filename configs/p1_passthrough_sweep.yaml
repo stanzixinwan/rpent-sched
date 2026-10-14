@@ -1,0 +1,27 @@
+# RPent's default ordering: the proxy only observes; the server's lock decides who goes next.
+# Only end-to-end request latency is visible (wait_s = 0, service_s = wait + service).
+name: p1_passthrough_sweep
+
+rpent:
+  robot: libero
+  libero_type: pro
+  planner: claude_code
+  model: claude-opus-4-8
+  cuda_device: 0
+  extra_args: []
+
+services:
+  vla:  {backend: http://127.0.0.1:9000, policy: passthrough}
+  sam3: {backend: http://127.0.0.1:9001, policy: passthrough}
+
+episodes:
+  suites: [libero_object_swap, libero_goal_swap, libero_spatial_swap, libero_10_swap]
+  tasks: [0, 1, 2, 3]
+  seeds: [0]
+  shuffle_seed: 0
+
+concurrency: [4, 16]
+episodes_per_level: 16
+repeats: 1
+episode_timeout_s: 3600
+arrival: {mode: closed}

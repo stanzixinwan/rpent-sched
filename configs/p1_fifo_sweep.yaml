@@ -1,0 +1,36 @@
+# P1 baseline: shared Pi0.5 + SAM3, proxy-enforced FIFO on the VLA, concurrency sweep.
+#   python -m rsched.sweep configs/p1_fifo_sweep.yaml
+# Cost: 5 levels x 16 episodes = 80 live planner episodes (~400 s each).
+name: p1_fifo_sweep
+
+rpent:
+  robot: libero
+  libero_type: pro
+  planner: claude_code          # claude_code | codex | api  (see RPent planner docs)
+  model: claude-opus-4-8        # RPent's quick-start model; change to what you use
+  cuda_device: 0                # GPU for the per-episode env_server
+  extra_args: []                # e.g. ["--max-turns", "60", "--reasoning-effort", "low"]
+
+services:
+  vla:
+    backend: http://127.0.0.1:9000   # = VLA_PORT
+    policy: fifo                     # passthrough | fifo | priority
+    max_inflight: 1                  # the server serializes predict anyway
+  sam3:
+    backend: http://127.0.0.1:9001   # = SAM3_PORT
+    policy: passthrough              # sam3.segment is a read-only (concurrent) method
+
+episodes:
+  # Same deterministic order at every level, so levels see the same task mix.
+  suites: [libero_object_swap, libero_goal_swap, libero_spatial_swap, libero_10_swap]
+  tasks: [0, 1, 2, 3]
+  seeds: [0]
+  shuffle_seed: 0
+
+concurrency: [1, 2, 4, 8, 16]
+episodes_per_level: 16
+repeats: 1
+episode_timeout_s: 3600
+arrival: {mode: closed}        # closed: keep N in flight; or {mode: poisson, rate_per_min: 2, seed: 0}
+gpu_sampler: true
+gpu_interval_s: 0.5
