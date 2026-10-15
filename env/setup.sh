@@ -37,6 +37,17 @@ if [[ $NO_GPU -eq 1 ]]; then
   exit 0
 fi
 
+# System libraries the simulator stack loads at import time (cv2 needs libGL;
+# MuJoCo offscreen rendering needs EGL). Minimal Ubuntu / WSL images lack them.
+missing=()
+for lib in libGL.so.1 libEGL.so.1 libglib-2.0.so.0; do
+  ldconfig -p | grep -q "$lib" || missing+=("$lib")
+done
+if (( ${#missing[@]} )); then
+  die "missing system libraries: ${missing[*]}
+  install with:  sudo apt update && sudo apt install -y libgl1 libegl1 libglib2.0-0"
+fi
+
 command -v nvidia-smi >/dev/null || die "nvidia-smi not found; install the NVIDIA driver (WSL2: Windows driver + CUDA on WSL)"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 

@@ -138,6 +138,10 @@ swap=32GB
 ```
 
 Then run `wsl --shutdown` in PowerShell, reopen Ubuntu, and check `free -g`.
+Fresh Ubuntu images on WSL also lack the GL libraries that OpenCV and MuJoCo
+load (`ImportError: libGL.so.1` from `env_server`):
+`sudo apt install -y libgl1 libegl1 libglib2.0-0`. `env/setup.sh` checks for them.
+
 Close large Windows programs (browsers, IDEs) while services load; after
 loading, host RAM use drops back.
 
