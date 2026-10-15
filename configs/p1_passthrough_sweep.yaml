@@ -8,7 +8,7 @@ rpent:
   planner: claude_code
   model: claude-opus-4-8
   cuda_device: 0
-  extra_args: []
+  extra_args: ["--memory-version", "GPT_5.5_xhigh"]
 
 services:
   vla:  {backend: http://127.0.0.1:9000, policy: passthrough}

@@ -1,0 +1,42 @@
+# P1 first baseline on a 16 GB laptop GPU (RTX 3080 Laptop, WSL2).
+#   python -m rsched.sweep configs/p1_laptop.yaml
+#   python analysis/breakdown.py results/p1_laptop/<stamp>
+# Cost: 1 + 2 + 4 levels x 4 episodes = 12 live planner episodes.
+# Laptop timings are noisy (thermal throttling); the full sweep (p1_fifo_sweep.yaml)
+# runs on a dedicated GPU. This run establishes the pipeline and a first breakdown.
+name: p1_laptop
+
+rpent:
+  robot: libero
+  libero_type: pro
+  planner: claude_code
+  model: claude-opus-4-8
+  cuda_device: 0
+  # Pin memory so every episode (and later every planner) uses the same corpus;
+  # "auto" silently falls back to this version for claude models anyway.
+  extra_args: ["--memory-version", "GPT_5.5_xhigh", "--max-turns", "60"]
+
+services:
+  vla:
+    backend: http://127.0.0.1:9000
+    policy: fifo
+    max_inflight: 1
+  sam3:
+    backend: http://127.0.0.1:9001
+    policy: passthrough
+
+episodes:
+  # One task per suite family, same order at every level.
+  list:
+    - {suite: libero_object_swap,  task: 2, seed: 0}
+    - {suite: libero_goal_swap,    task: 0, seed: 0}
+    - {suite: libero_spatial_swap, task: 1, seed: 0}
+    - {suite: libero_10_swap,      task: 3, seed: 0}
+
+concurrency: [1, 2, 4]
+episodes_per_level: 4
+repeats: 1
+episode_timeout_s: 2400
+arrival: {mode: closed}
+gpu_sampler: true
+gpu_interval_s: 0.5

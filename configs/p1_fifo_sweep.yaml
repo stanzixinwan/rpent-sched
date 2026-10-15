@@ -9,7 +9,7 @@ rpent:
   planner: claude_code          # claude_code | codex | api  (see RPent planner docs)
   model: claude-opus-4-8        # RPent's quick-start model; change to what you use
   cuda_device: 0                # GPU for the per-episode env_server
-  extra_args: []                # e.g. ["--max-turns", "60", "--reasoning-effort", "low"]
+  extra_args: ["--memory-version", "GPT_5.5_xhigh"]  # pin memory corpus
 
 services:
   vla:
