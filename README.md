@@ -124,6 +124,23 @@ Read from the pinned commit; each point shapes a design choice here.
   `rsched/launch.py`); `priority` policy with aging; batched-serving baseline;
   admission control in `sweep.py`.
 
+## WSL2
+
+WSL2 gets half of Windows RAM by default. Pi0.5 is built in fp32 on the CPU
+before moving to the GPU (~13 GB peak), so the kernel can kill it during
+startup (`Killed` in `launch_services.sh`). Raise the limits in
+`%UserProfile%\.wslconfig` on Windows:
+
+```ini
+[wsl2]
+memory=26GB
+swap=32GB
+```
+
+Then run `wsl --shutdown` in PowerShell, reopen Ubuntu, and check `free -g`.
+Close large Windows programs (browsers, IDEs) while services load; after
+loading, host RAM use drops back.
+
 ## Hardware notes
 
 A 16 GB laptop GPU can run one episode for development; WSL2 needs the Windows

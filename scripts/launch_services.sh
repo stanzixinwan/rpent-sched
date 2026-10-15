@@ -43,6 +43,10 @@ wait_ready() {  # $1 = name, $2 = port, $3 = timeout seconds
     sleep 5; waited=$((waited + 5))
     if [[ -f "$SERVICE_DIR/$name.pid" ]] && ! kill -0 "$(cat "$SERVICE_DIR/$name.pid")" 2>/dev/null; then
       tail -n 30 "$SERVICE_DIR/$name.log" >&2
+      if dmesg 2>/dev/null | tail -n 50 | grep -qi "out of memory\|oom-kill\|killed process"; then
+        log "kernel OOM killer stopped $name: host RAM ran out while loading (not GPU memory)."
+        log "Raise WSL2 memory/swap (README, 'WSL2') or stop other programs, then retry."
+      fi
       die "$name exited during startup (see results/services/$name.log)"
     fi
     (( waited >= timeout )) && die "$name not ready after ${timeout}s"
@@ -59,13 +63,28 @@ fi
 [[ -n "${PI05_CHECKPOINT_PATH:-}" && -e "$PI05_CHECKPOINT_PATH" ]] || die "PI05_CHECKPOINT_PATH not set or missing (env/.env)"
 [[ -n "${SAM3_CHECKPOINT_PATH:-}" && -e "$SAM3_CHECKPOINT_PATH" ]] || die "SAM3_CHECKPOINT_PATH not set or missing (env/.env)"
 
+mem_report() {
+  free -g | awk '/^Mem:/ {printf "[rsched] host RAM: %s GB total, %s GB available\n", $2, $7}
+                 /^Swap:/ {printf "[rsched] swap:     %s GB total\n", $2}'
+}
+mem_report
+total_gb=$(free -g | awk '/^Mem:/ {print $2}')
+swap_gb=$(free -g | awk '/^Swap:/ {print $2}')
+if (( total_gb + swap_gb < 24 )); then
+  log "WARNING: <24 GB RAM+swap. Pi0.5 is built in fp32 on the CPU before moving to"
+  log "         the GPU (~13 GB peak); the kernel may kill it. On WSL2, raise memory/swap"
+  log "         in %UserProfile%\\.wslconfig (see README, 'WSL2')."
+fi
+
+# Start one at a time: both models load weights through host RAM, and loading
+# them together roughly doubles the peak (WSL2 default = half of Windows RAM).
 start vla "$VLA_PORT" python -m rpent.robots.components.pi05_vla_server \
   --embodiment libero --cuda-device "$CUDA_DEVICE" \
   --transport http --host 127.0.0.1 --port "$VLA_PORT"
+wait_ready vla "$VLA_PORT" 900
+
 start sam3 "$SAM3_PORT" python -m rpent.robots.components.sam3_server \
   --cuda-device "$CUDA_DEVICE" \
   --transport http --host 127.0.0.1 --port "$SAM3_PORT"
-
-wait_ready vla "$VLA_PORT" 900
 wait_ready sam3 "$SAM3_PORT" 900
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader | sed 's/^/[rsched] GPU memory after load: /'
