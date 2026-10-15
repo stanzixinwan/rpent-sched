@@ -21,7 +21,18 @@ out="results/smoke_gpu/$(date +%Y%m%d-%H%M%S)"
 python -m rsched.sweep configs/smoke_gpu.yaml --out "$out"
 python analysis/breakdown.py "$out"
 
-trace=$(ls "$out"/N1_r0/traces/episode_*.jsonl | head -1)
+show_logs() {
+  local lvl="$out/N1_r0"
+  for f in "$lvl"/logs/episode_*.log "$lvl"/episodes/*/run.log "$lvl"/episodes/*/env_server.log; do
+    [[ -f "$f" ]] || continue
+    printf '\n\033[1;33m----- tail %s -----\033[0m\n' "${f#"$RS_ROOT"/}"
+    tail -n 40 "$f"
+  done
+}
+
+trace=$(ls "$out"/N1_r0/traces/episode_*.jsonl 2>/dev/null | head -1)
+[[ -n "$trace" ]] || { show_logs; die "no episode trace written; see logs above"; }
+trap 'show_logs' ERR
 python - "$trace" "$out/N1_r0/proxy_vla.jsonl" <<'PY'
 import sys
 from rsched.traceio import read_jsonl
