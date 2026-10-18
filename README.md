@@ -50,6 +50,10 @@ python -m rsched.sweep configs/p1_fifo_sweep.yaml          # N = 1,2,4,8,16
 python analysis/breakdown.py results/p1_fifo_sweep/<stamp>
 ```
 
+`rsched.sweep` loads `env/.env` itself, then checks planner credentials with
+RPent's `rpent-check-llm` before launching anything, and aborts after two
+consecutive episodes that exit without a tool call.
+
 `breakdown.py` splits each episode's wall-clock time into components that add up:
 
 | component | meaning |

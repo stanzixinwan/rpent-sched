@@ -46,6 +46,50 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 
+def load_env_file(path: Path) -> list[str]:
+    """Load KEY=VALUE lines from env/.env without overriding the shell.
+
+    ``scripts/*.sh`` source this file, but ``python -m rsched.sweep`` run directly
+    did not, so episodes started without the planner API key.
+    """
+    if not path.exists():
+        return []
+    os.environ.setdefault("RS_ROOT", str(REPO_ROOT))
+    loaded = []
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.removeprefix("export ").partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key and value and key not in os.environ:
+            os.environ[key] = os.path.expandvars(value)
+            loaded.append(key)
+    return loaded
+
+
+PLANNER_KEY_ENV = {"claude_code": "ANTHROPIC_API_KEY", "codex": "OPENAI_API_KEY"}
+
+
+def preflight_planner(cfg: dict) -> None:
+    """One cheap request through RPent's own checker before launching any episode."""
+    r = cfg["rpent"]
+    if "command" in r or r.get("planner") not in ("claude_code", "codex", "api"):
+        return  # custom command (tests) or a planner the checker does not cover
+    cmd = [sys.executable, "-c", "import sys; from rpent.cli.check_llm import main; sys.exit(main())",
+           "--planner", r["planner"]]
+    if r.get("model"):
+        cmd += ["--model", r["model"]]
+    print("preflight: checking planner credentials with rpent-check-llm ...", flush=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
+    print("  " + (proc.stdout + proc.stderr).strip().replace("\n", "\n  "), flush=True)
+    if proc.returncode != 0:
+        key = PLANNER_KEY_ENV.get(r["planner"], "the planner's API key")
+        sys.exit(f"preflight FAILED: the planner cannot authenticate. Set {key} in env/.env "
+                 f"(currently {'set' if os.environ.get(key) else 'NOT set'}) and retry. "
+                 "Skip with --skip-preflight.")
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -302,9 +346,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--repeats", type=int, help="override repeats")
     ap.add_argument("--out", default=None, help="output root (default results/<name>/<stamp>)")
     ap.add_argument("--dry-run", action="store_true", help="print commands, run nothing")
+    ap.add_argument("--skip-preflight", action="store_true", help="skip the planner credential check")
     args = ap.parse_args(argv)
 
+    loaded = load_env_file(REPO_ROOT / "env" / ".env")
+    if loaded:
+        print(f"loaded from env/.env: {', '.join(sorted(loaded))}")
     cfg = yaml.safe_load(Path(args.config).read_text())
+    if not (args.dry_run or args.skip_preflight):
+        preflight_planner(cfg)
     levels = args.levels or cfg["concurrency"]
     repeats = args.repeats or cfg.get("repeats", 1)
     stamp = time.strftime("%Y%m%d-%H%M%S")
