@@ -110,6 +110,9 @@ def fake_main() -> int:
     ap.add_argument("--output-dir")
     args, _ = ap.parse_known_args(sys.argv[1:])
 
+    if os.environ.get("RS_FAKE_CRASH"):
+        time.sleep(0.2)
+        raise RuntimeError("[env] wait / client connect failed: fake env_server crash")
     rng = random.Random(f"{args.suite}-{args.task}-{args.seed}")
     think = float(os.environ.get("RS_FAKE_THINK_S", "0.15"))
     owner = FakeLiberoTools(

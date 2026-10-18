@@ -64,3 +64,32 @@ def test_sweep_and_breakdown(fake_services, tmp_path):
     lv = levels.set_index("level")
     assert lv.loc[4, "vla_wait_mean_s"] > lv.loc[1, "vla_wait_mean_s"], "contention adds queueing"
     assert (out / "analysis" / "breakdown.png").exists()
+
+
+def test_sweep_aborts_on_repeated_crashes(fake_services, tmp_path):
+    cfg = {
+        "name": "crash",
+        "rpent": {"command": [sys.executable, str(FAKES / "fake_rpent_episode.py")],
+                  "planner": "fake", "robot": "libero"},
+        "services": {"vla": {"backend": f"http://127.0.0.1:{fake_services['vla']}", "policy": "fifo"},
+                     "sam3": {"backend": f"http://127.0.0.1:{fake_services['sam3']}", "policy": "passthrough"}},
+        "episodes": {"list": [{"suite": "libero_object_swap", "task": 2}]},
+        "concurrency": [1, 2], "episodes_per_level": 5, "gpu_sampler": False,
+    }
+    cfg_path = tmp_path / "crash.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    out = tmp_path / "run"
+    env = {**os.environ, "RS_FAKE_CRASH": "1",
+           "RS_FAKE_ENV_ENDPOINT": f"http://127.0.0.1:{fake_services['env']}"}
+    proc = subprocess.run([sys.executable, "-m", "rsched.sweep", str(cfg_path), "--out", str(out)],
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert proc.returncode != 0
+    assert "SWEEP ABORTED at N=1" in proc.stderr
+    assert "fake env_server crash" in proc.stdout, "log tail printed for the failed episode"
+    assert not (out / "N2_r0").exists(), "later levels are not started"
+    manifest = (out / "N1_r0" / "manifest.json").read_text()
+    assert '"aborted"' in manifest and len(list((out / "N1_r0" / "traces").glob("*.jsonl"))) == 2
+
+    a = subprocess.run([sys.executable, "analysis/breakdown.py", str(out)], cwd=ROOT,
+                       capture_output=True, text=True, timeout=120)
+    assert a.returncode == 0 and "CRASHED" in a.stdout

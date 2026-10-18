@@ -124,9 +124,33 @@ def episode_pool(cfg: dict) -> list[tuple[str, int, int]]:
 # ---------------------------------------------------------------------------
 
 
+class SweepAborted(RuntimeError):
+    pass
+
+
+def count_tool_calls(trace: Path) -> int:
+    if not trace.exists():
+        return 0
+    with trace.open() as fh:
+        return sum(1 for line in fh if '"type":"tool"' in line)
+
+
+def print_log_tail(path: Path, n: int = 25) -> None:
+    if not path.exists():
+        return
+    lines = path.read_text(errors="replace").splitlines()[-n:]
+    print(f"  ----- tail {path} -----")
+    for line in lines:
+        print("  | " + line)
+    print("  -----", flush=True)
+
+
 class Level:
     def __init__(self, cfg: dict, level: int, rep: int, out: Path, dry_run: bool) -> None:
         self.cfg, self.level, self.rep, self.out, self.dry_run = cfg, level, rep, out, dry_run
+        # Abort after this many consecutive episodes that exit without a single tool call.
+        self.fail_fast = 0 if dry_run else int(cfg.get("fail_fast", 2))
+        self.consecutive_failures = 0
         self.procs: list[subprocess.Popen] = []
         self.logs = out / "logs"
         self.logs.mkdir(parents=True, exist_ok=True)
@@ -233,15 +257,32 @@ class Level:
                         rc = "timeout"
                     if rc is not None:
                         running.pop(eid)
-                        finished.append({"episode": eid, "returncode": rc, "wall_s": now_t - ts})
-                        print(f"  done  {eid} rc={rc} wall={now_t - ts:.1f}s", flush=True)
+                        n_tools = count_tool_calls(self.out / "traces" / f"episode_{eid}.jsonl")
+                        finished.append({"episode": eid, "returncode": rc, "wall_s": now_t - ts,
+                                         "tool_calls": n_tools})
+                        status = "" if rc == 0 and n_tools else "  <-- FAILED"
+                        print(f"  done  {eid} rc={rc} tools={n_tools} wall={now_t - ts:.1f}s{status}",
+                              flush=True)
+                        if status:
+                            print_log_tail(self.logs / f"episode_{eid}.log")
+                            self.consecutive_failures += 1
+                        else:
+                            self.consecutive_failures = 0
+                        if self.consecutive_failures >= self.fail_fast > 0:
+                            raise SweepAborted(
+                                f"{self.consecutive_failures} episodes in a row failed before doing "
+                                "any work; aborting to save time and API cost (see log above)")
                 time.sleep(0.5)
+        except SweepAborted as exc:
+            aborted = str(exc)
+        else:
+            aborted = None
         finally:
             for p, _ in running.values():
                 os.killpg(p.pid, signal.SIGTERM)
             self.stop_infra()
         return {"t_start": t0, "t_end": time.time(), "episodes": finished,
-                "specs": [s.__dict__ for s in specs], "endpoints": endpoints}
+                "specs": [s.__dict__ for s in specs], "endpoints": endpoints, "aborted": aborted}
 
     def stop_infra(self) -> None:
         for p in self.procs:
@@ -285,6 +326,8 @@ def main(argv: list[str] | None = None) -> None:
             }
             manifest.update(Level(cfg, level, rep, out, args.dry_run).run())
             (out / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+            if manifest["aborted"]:
+                sys.exit(f"SWEEP ABORTED at N={level}: {manifest['aborted']}")
     print(f"all levels done: {root}")
 
 

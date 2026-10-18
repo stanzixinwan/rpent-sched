@@ -126,6 +126,8 @@ def load_level(level_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
                 "n_vla_calls": sum(1 for r in in_tool if service_of(r.get("method")) == "vla"),
                 "input_tokens": stats.get("total_input_tokens"),
                 "output_tokens": stats.get("total_output_tokens"),
+                # Crashed = exited non-zero or never ran a tool: not a measurement.
+                "crashed": end.get("exit_code") not in (0, None) or not tools,
                 **comp,
             }
         )
@@ -138,11 +140,14 @@ def load_level(level_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
 def summarize_level(eps: pd.DataFrame, rpc: pd.DataFrame, manifest: dict) -> dict:
     makespan = manifest["t_end"] - manifest["t_start"]
     n_ok = int((eps["success"] == True).sum()) if not eps.empty else 0  # noqa: E712
+    n_crashed = int(eps["crashed"].sum()) if not eps.empty else 0
+    all_eps, eps = eps, eps[~eps["crashed"]] if not eps.empty else eps  # time stats: valid runs only
     row = {
-        "level": manifest["level"], "repeat": manifest["repeat"], "episodes": len(eps),
-        "successes": n_ok, "success_rate": n_ok / len(eps) if len(eps) else np.nan,
+        "level": manifest["level"], "repeat": manifest["repeat"], "episodes": len(all_eps),
+        "crashed": n_crashed, "successes": n_ok,
+        "success_rate": n_ok / len(all_eps) if len(all_eps) else np.nan,
         "makespan_s": makespan, "success_per_hour": n_ok / makespan * 3600 if makespan else np.nan,
-        "episodes_per_hour": len(eps) / makespan * 3600 if makespan else np.nan,
+        "episodes_per_hour": len(all_eps) / makespan * 3600 if makespan else np.nan,
         "wall_mean_s": eps["wall_s"].mean(), "wall_p50_s": eps["wall_s"].median(),
         "wall_p95_s": eps["wall_s"].quantile(0.95),
     }
@@ -256,7 +261,15 @@ def main(argv: list[str] | None = None) -> None:
     plot_breakdown(levels, out / "breakdown.png")
     plot_wait_cdf(rpc, out / "vla_wait_cdf.png")
 
-    cols = ["level", "episodes", "success_rate", "success_per_hour", "wall_mean_s", "wall_p95_s",
+    if eps["crashed"].any():
+        bad = eps[eps["crashed"]]
+        print(f"\n!!! {len(bad)}/{len(eps)} episodes CRASHED (non-zero exit or no tool calls); "
+              "they are excluded from time stats and are not measurements.")
+        print("!!! inspect: <level_dir>/logs/episode_<id>.log  e.g. " + ", ".join(bad["episode"].head(3)))
+        if len(bad) == len(eps):
+            print("!!! no valid episodes: fix the failure before using these numbers.\n")
+
+    cols = ["level", "episodes", "crashed", "success_rate", "success_per_hour", "wall_mean_s", "wall_p95_s",
             "planner_frac", "vla_wait_frac", "vla_service_frac", "sim_frac"]
     with pd.option_context("display.width", 160, "display.float_format", "{:.3f}".format):
         print(levels[[c for c in cols if c in levels]].to_string(index=False))
