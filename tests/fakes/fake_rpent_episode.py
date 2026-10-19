@@ -141,12 +141,14 @@ def fake_main() -> int:
     cli.RunFinalizationContext(
         output_dir=Path(args.output_dir or "."), robot_name="libero",
         task_desc={"suite": args.suite, "task": args.task, "seed": args.seed},
-        environment_success=rng.random() < 0.7, agent_error=None,
+        environment_success=rng.random() < 0.7, agent_error=os.environ.get("RS_FAKE_AGENT_ERROR"),
         elapsed_s=time.time() - t0, planner="fake", model="fake",
         reasoning_effort="none", max_turns=10, planner_timeout_s=None,
         finish_result=None, stats={"total_input_tokens": 1000, "total_output_tokens": 100},
     )
-    return 0
+    if os.environ.get("RS_FAKE_PRINT"):
+        print(os.environ["RS_FAKE_PRINT"], flush=True)
+    return int(os.environ.get("RS_FAKE_EXIT", "0"))
 
 
 cli.main = fake_main

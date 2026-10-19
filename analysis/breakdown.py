@@ -34,6 +34,8 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rsched.traceio import read_jsonl  # noqa: E402
 
+FATAL_ERRORS = ("Credit balance is too low", "billing_error", "authentication_failed", "Not logged in")
+
 COMPONENTS = [
     "startup", "planner", "vla_wait", "vla_service", "sam3_wait", "sam3_service",
     "sim", "rpc_overhead", "tool_other",
@@ -126,8 +128,13 @@ def load_level(level_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
                 "n_vla_calls": sum(1 for r in in_tool if service_of(r.get("method")) == "vla"),
                 "input_tokens": stats.get("total_input_tokens"),
                 "output_tokens": stats.get("total_output_tokens"),
-                # Crashed = exited non-zero or never ran a tool: not a measurement.
-                "crashed": end.get("exit_code") not in (0, None) or not tools,
+                "cost_usd": stats.get("total_cost_usd"),
+                "turns": stats.get("turns_used"),
+                # Not a measurement: never ran a tool, never finished, or cut off by a
+                # planner billing/auth failure. Non-zero exit alone is NOT a crash: rpent
+                # exits 1 when the planner hits --max-turns, a valid (unsolved) episode.
+                "crashed": (not tools or not outcome
+                            or any(p in str(outcome.get("agent_error") or "") for p in FATAL_ERRORS)),
                 **comp,
             }
         )
@@ -148,6 +155,9 @@ def summarize_level(eps: pd.DataFrame, rpc: pd.DataFrame, manifest: dict) -> dic
         "success_rate": n_ok / len(all_eps) if len(all_eps) else np.nan,
         "makespan_s": makespan, "success_per_hour": n_ok / makespan * 3600 if makespan else np.nan,
         "episodes_per_hour": len(all_eps) / makespan * 3600 if makespan else np.nan,
+        "cost_usd": all_eps["cost_usd"].sum() if "cost_usd" in all_eps else np.nan,
+        "cost_per_success_usd": (all_eps["cost_usd"].sum() / n_ok
+                                 if n_ok and "cost_usd" in all_eps else np.nan),
         "wall_mean_s": eps["wall_s"].mean(), "wall_p50_s": eps["wall_s"].median(),
         "wall_p95_s": eps["wall_s"].quantile(0.95),
     }
@@ -263,13 +273,18 @@ def main(argv: list[str] | None = None) -> None:
 
     if eps["crashed"].any():
         bad = eps[eps["crashed"]]
-        print(f"\n!!! {len(bad)}/{len(eps)} episodes CRASHED (non-zero exit or no tool calls); "
+        print(f"\n!!! {len(bad)}/{len(eps)} episodes are NOT measurements (no tool calls, no outcome, or "
+              "planner billing/auth failure); "
               "they are excluded from time stats and are not measurements.")
         print("!!! inspect: <level_dir>/logs/episode_<id>.log  e.g. " + ", ".join(bad["episode"].head(3)))
         if len(bad) == len(eps):
             print("!!! no valid episodes: fix the failure before using these numbers.\n")
 
-    cols = ["level", "episodes", "crashed", "success_rate", "success_per_hour", "wall_mean_s", "wall_p95_s",
+    if "cost_usd" in eps and eps["cost_usd"].notna().any():
+        print(f"planner cost: ${eps['cost_usd'].sum():.2f} total, "
+              f"${eps['cost_usd'].mean():.2f}/episode (max ${eps['cost_usd'].max():.2f})")
+
+    cols = ["level", "episodes", "crashed", "cost_usd", "success_rate", "success_per_hour", "wall_mean_s", "wall_p95_s",
             "planner_frac", "vla_wait_frac", "vla_service_frac", "sim_frac"]
     with pd.option_context("display.width", 160, "display.float_format", "{:.3f}".format):
         print(levels[[c for c in cols if c in levels]].to_string(index=False))

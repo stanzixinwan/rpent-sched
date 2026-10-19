@@ -179,6 +179,22 @@ def count_tool_calls(trace: Path) -> int:
         return sum(1 for line in fh if '"type":"tool"' in line)
 
 
+# Planner failures that will hit every later episode too; matched in the episode log.
+FATAL_PATTERNS = {
+    "billing_error": "billing error",
+    "Credit balance is too low": "billing error",
+    "authentication_failed": "authentication failure",
+    "Not logged in": "authentication failure",
+}
+
+
+def fatal_planner_error(log: Path) -> str | None:
+    if not log.exists():
+        return None
+    tail = log.read_text(errors="replace")[-20000:]
+    return next((kind for pat, kind in FATAL_PATTERNS.items() if pat in tail), None)
+
+
 def print_log_tail(path: Path, n: int = 25) -> None:
     if not path.exists():
         return
@@ -304,18 +320,29 @@ class Level:
                         n_tools = count_tool_calls(self.out / "traces" / f"episode_{eid}.jsonl")
                         finished.append({"episode": eid, "returncode": rc, "wall_s": now_t - ts,
                                          "tool_calls": n_tools})
-                        status = "" if rc == 0 and n_tools else "  <-- FAILED"
+                        log_path = self.logs / f"episode_{eid}.log"
+                        fatal = fatal_planner_error(log_path)
+                        if fatal:
+                            status = f"  <-- PLANNER {fatal.upper()}"
+                        elif n_tools == 0:
+                            status = "  <-- CRASHED (no tool calls)"
+                        elif rc != 0:
+                            status = "  (exit != 0: task unsolved or planner stopped, e.g. max turns)"
+                        else:
+                            status = ""
                         print(f"  done  {eid} rc={rc} tools={n_tools} wall={now_t - ts:.1f}s{status}",
                               flush=True)
-                        if status:
-                            print_log_tail(self.logs / f"episode_{eid}.log")
-                            self.consecutive_failures += 1
-                        else:
-                            self.consecutive_failures = 0
+                        if fatal or n_tools == 0:
+                            print_log_tail(log_path)
+                        if fatal:
+                            raise SweepAborted(
+                                f"planner {fatal} (e.g. out of API credit or bad key); every further "
+                                "episode would fail. Fix it, then rerun the remaining levels with --levels")
+                        self.consecutive_failures = self.consecutive_failures + 1 if n_tools == 0 else 0
                         if self.consecutive_failures >= self.fail_fast > 0:
                             raise SweepAborted(
-                                f"{self.consecutive_failures} episodes in a row failed before doing "
-                                "any work; aborting to save time and API cost (see log above)")
+                                f"{self.consecutive_failures} episodes in a row exited without a single "
+                                "tool call; aborting to save time and API cost (see log above)")
                 time.sleep(0.5)
         except SweepAborted as exc:
             aborted = str(exc)

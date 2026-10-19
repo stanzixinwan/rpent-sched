@@ -92,4 +92,47 @@ def test_sweep_aborts_on_repeated_crashes(fake_services, tmp_path):
 
     a = subprocess.run([sys.executable, "analysis/breakdown.py", str(out)], cwd=ROOT,
                        capture_output=True, text=True, timeout=120)
-    assert a.returncode == 0 and "CRASHED" in a.stdout
+    assert a.returncode == 0 and "NOT measurements" in a.stdout
+
+
+def _run(fake_services, tmp_path, extra_env, levels=(1, 2), n=3):
+    cfg = {
+        "name": "t",
+        "rpent": {"command": [sys.executable, str(FAKES / "fake_rpent_episode.py")],
+                  "planner": "fake", "robot": "libero"},
+        "services": {"vla": {"backend": f"http://127.0.0.1:{fake_services['vla']}", "policy": "fifo"},
+                     "sam3": {"backend": f"http://127.0.0.1:{fake_services['sam3']}", "policy": "passthrough"}},
+        "episodes": {"list": [{"suite": "libero_object_swap", "task": 2}]},
+        "concurrency": list(levels), "episodes_per_level": n, "gpu_sampler": False,
+    }
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    out = tmp_path / "run"
+    env = {**os.environ, "RS_FAKE_THINK_S": "0.02",
+           "RS_FAKE_ENV_ENDPOINT": f"http://127.0.0.1:{fake_services['env']}", **extra_env}
+    proc = subprocess.run([sys.executable, "-m", "rsched.sweep", str(cfg_path), "--out", str(out)],
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    return proc, out
+
+
+def test_billing_error_aborts_immediately(fake_services, tmp_path):
+    proc, out = _run(fake_services, tmp_path, {
+        "RS_FAKE_PRINT": "[cc-assistant-error] billing_error", "RS_FAKE_EXIT": "1",
+        "RS_FAKE_AGENT_ERROR": "Claude Code returned an error result: Credit balance is too low"})
+    assert proc.returncode != 0 and "planner billing error" in proc.stderr
+    assert len(list((out / "N1_r0" / "traces").glob("*.jsonl"))) == 1, "stops after the first one"
+    a = subprocess.run([sys.executable, "analysis/breakdown.py", str(out)], cwd=ROOT,
+                       capture_output=True, text=True, timeout=120)
+    assert "NOT measurements" in a.stdout
+
+
+def test_max_turns_exit_is_a_valid_measurement(fake_services, tmp_path):
+    # rpent exits 1 when the planner hits --max-turns; the episode still did real work.
+    proc, out = _run(fake_services, tmp_path, {"RS_FAKE_EXIT": "1",
+                     "RS_FAKE_AGENT_ERROR": "Reached maximum number of turns (60)"}, levels=(1,), n=3)
+    assert proc.returncode == 0, proc.stderr
+    assert "task unsolved or planner stopped" in proc.stdout
+    subprocess.run([sys.executable, "analysis/breakdown.py", str(out)], cwd=ROOT, check=True,
+                   capture_output=True, timeout=120)
+    eps = pd.read_csv(out / "analysis" / "episodes.csv")
+    assert not eps["crashed"].any() and eps["n_tools"].gt(0).all()

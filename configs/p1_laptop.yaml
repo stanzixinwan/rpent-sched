@@ -14,7 +14,7 @@ rpent:
   cuda_device: 0
   # Pin memory so every episode (and later every planner) uses the same corpus;
   # "auto" silently falls back to this version for claude models anyway.
-  extra_args: ["--memory-version", "GPT_5.5_xhigh", "--max-turns", "60"]
+  extra_args: ["--memory-version", "GPT_5.5_xhigh", "--claude-code-max-budget-usd", "3", "--max-turns", "40"]
 
 services:
   vla:
