@@ -10,8 +10,6 @@ episode time goes as concurrency grows, and tests whether the planner's
 predicts downstream VLA demand better than the history-based estimates used by
 current VLA serving systems.
 
-Current status, decisions, and next steps: [`docs/STATUS.md`](docs/STATUS.md).
-
 ```
  rpent episode ──(rsched.launch hooks)──► rsched proxy ──► Pi0.5 VLA service
  rpent episode ──────────────────────────►  (trace +   ──► SAM3 service
@@ -72,19 +70,6 @@ Outputs: `episodes.csv`, `levels.csv`, `tools.csv`, `breakdown.png`,
 `vla_wait_cdf.png`. Proxy policies: `passthrough` (RPent's own unordered
 behaviour), `fifo`, `priority` with aging (reads the `X-RS-Priority` header).
 
-## First measurements
-
-LIBERO-PRO, Claude Code planner, RTX 3080 laptop (WSL2), N = 1 and 2, six valid
-episodes. Mean episode 547 s (171 to 1069 s).
-
-| planner | simulator | startup | other tool | VLA | SAM3 | VLA queueing |
-|---|---|---|---|---|---|---|
-| 57% | 20% | 14% | 5% | 2.7% | 1.7% | ~0 |
-
-VLA busy 2.5% (N=1) to 7.6% (N=2) of wall time; 465 ms per `vla.predict` on the
-laptop. Planner cost $1 to 9 per episode. With a per-step LLM planner the
-bottleneck is the planner, not the VLA. See `docs/STATUS.md` for what follows.
-
 ## Layout
 
 ```
@@ -97,35 +82,12 @@ configs/            one YAML per experiment
 scripts/            services, smoke test
 env/                setup script, .env template
 tests/              CPU tests on RPent's real RPC classes with fake services
-docs/STATUS.md      project status, decisions, gates, known issues
+docs/               status, RPent notes, troubleshooting
 third_party/RPent   pinned upstream (read-only)
 ```
 
-## Facts from RPent's code (commit ef70215)
+## Docs
 
-1. **The VLA is serialized but not FIFO.** Every `vla.predict` takes
-   `RpcFacade`'s exclusive write lock; waiters wake via `notify_all` and race.
-   The proxy's `fifo` policy makes the baseline well defined.
-2. **One `vla.predict` = one action chunk** (5 actions on LIBERO).
-   `pi0_pick` / `pi0_doubled` loop chunks until success or `max_chunks`
-   (default 24 / 20), which the planner writes before the primitive starts.
-3. **SAM3 is concurrent** (`sam3.segment` is a read-only method).
-4. **Pi0.5 batches natively** (`predict_action_batch`); clients send batch 1.
-5. **Scripted tools** (`move_to`, `move_pose`, `rotate_*`, `release`,
-   `set_gripper`) use only the simulator.
-6. **One funnel for all planners**: `Toolkit.execute_tool`.
-7. **Flash Mode** (`--planner flash`) replays stored plans with no LLM; Molmo-8B
-   (separate venv) localizes objects, then VLA and SAM3 execute. 78 published
-   plans for LIBERO-PRO.
-
-## Troubleshooting
-
-- **`Killed` while loading services (WSL2).** Pi0.5 is built in fp32 on the CPU
-  first (~13 GB peak). In `%UserProfile%\.wslconfig` set `memory=26GB` and
-  `swap=32GB` under `[wsl2]`, run `wsl --shutdown`, check `free -g`.
-- **`ImportError: libGL.so.1` from `env_server`.**
-  `sudo apt install -y libgl1 libegl1 libglib2.0-0` (setup checks for it).
-- **`Not logged in` / `authentication_failed`.** Put the key in `env/.env`.
-- **Clone location on WSL.** Use the Linux filesystem (`~/`), not `/mnt/c`.
-- **GPU memory numbers on WSL2** from `nvidia-smi` are unreliable; measure on
-  native Linux. Laptop GPUs also throttle, so treat laptop timings as development data.
+- [`docs/STATUS.md`](docs/STATUS.md): research question, latest results, decisions, gates, known issues
+- [`docs/rpent_notes.md`](docs/rpent_notes.md): RPent behaviour this project relies on, with source references
+- [`docs/troubleshooting.md`](docs/troubleshooting.md): WSL2, missing libraries, planner credentials
