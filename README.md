@@ -82,12 +82,11 @@ configs/            one YAML per experiment
 scripts/            services, smoke test
 env/                setup script, .env template
 tests/              CPU tests on RPent's real RPC classes with fake services
-docs/               status, RPent notes, troubleshooting
+docs/               RPent notes, troubleshooting
 third_party/RPent   pinned upstream (read-only)
 ```
 
 ## Docs
 
-- [`docs/STATUS.md`](docs/STATUS.md): research question, latest results, decisions, gates, known issues
 - [`docs/rpent_notes.md`](docs/rpent_notes.md): RPent behaviour this project relies on, with source references
 - [`docs/troubleshooting.md`](docs/troubleshooting.md): WSL2, missing libraries, planner credentials

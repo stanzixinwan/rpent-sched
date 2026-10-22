@@ -36,8 +36,8 @@ to `third_party/RPent`.
 | fact | source | why it matters here |
 |---|---|---|
 | Each episode spawns its own `env_server` with `MUJOCO_GL=egl` | `robots/libero/robot_spec.py:385`, `:419` | simulator cost scales with N; needs EGL and libGL |
-| `finalize_run` is optional and LIBERO does not define one | `rpent/robots/robot_spec.py:88`, `rpent/cli/main.py:700` | issue K1: the `outcome` hook in `rsched/launch.py` never fires |
-| Claude Code planner stats include `total_cost_usd` | `rpent/planner/claude_code.py:632` | per-episode cost is available once K1 is fixed |
+| `finalize_run` is optional and LIBERO does not define one | `rpent/robots/robot_spec.py:88`, `rpent/cli/main.py:700` | the `outcome` hook in `rsched/launch.py` never fires (known issue, to fix) |
+| Claude Code planner stats include `total_cost_usd` | `rpent/planner/claude_code.py:632` | per-episode cost is available once the outcome hook is fixed |
 | `--memory-version auto` falls back to `GPT_5.5_xhigh` for unmapped models | `robots/libero/memory.py:76` | configs pin it explicitly |
 
 ## Flash Mode (plan-once regime)

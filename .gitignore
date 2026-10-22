@@ -12,3 +12,7 @@ results/*
 
 # OS
 .DS_Store
+
+# private working notes (kept local, not published)
+.cursor/
+docs/STATUS.md
