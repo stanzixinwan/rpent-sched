@@ -9,3 +9,6 @@
 - **Clone location on WSL.** Use the Linux filesystem (`~/`), not `/mnt/c`.
 - **GPU memory numbers on WSL2** from `nvidia-smi` are unreliable; measure on
   native Linux. Laptop GPUs also throttle, so treat laptop timings as development data.
+- **`No module named 'einops'` (or another module) when Molmo starts.** RPent's
+  `[molmo]` extra omits packages that Molmo2's remote code imports. Install them
+  into `.venv-molmo`: `uv pip install --python .venv-molmo/bin/python einops`.
