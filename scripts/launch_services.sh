@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Start the shared Pi0.5 VLA and SAM3 services once; every sweep reuses them.
+# Molmo starts too when MOLMO_CHECKPOINT_PATH is set (Flash sweeps). It uses
+# its own interpreter: transformers>=4.57 conflicts with the LIBERO pin.
 #
-#   bash scripts/launch_services.sh          # start both (no-op if already healthy)
+#   bash scripts/launch_services.sh          # start (no-op if already healthy)
 #   bash scripts/launch_services.sh status   # health check only
 #
-# Services listen on 127.0.0.1:$VLA_PORT and :$SAM3_PORT (env/.env). Sweeps put
-# an rsched proxy in front of each, so never point rpent at these ports directly
-# during measurements. Logs and PIDs: results/services/.
+# Services listen on 127.0.0.1:$VLA_PORT, :$SAM3_PORT, and :$MOLMO_PORT
+# (env/.env). Sweeps put an rsched proxy in front of each, so never point
+# rpent at these ports directly during measurements. Logs and PIDs:
+# results/services/.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
@@ -57,6 +60,11 @@ wait_ready() {  # $1 = name, $2 = port, $3 = timeout seconds
 if [[ "${1:-}" == "status" ]]; then
   healthz "$VLA_PORT" && log "vla  :$VLA_PORT ok" || log "vla  :$VLA_PORT DOWN"
   healthz "$SAM3_PORT" && log "sam3 :$SAM3_PORT ok" || log "sam3 :$SAM3_PORT DOWN"
+  if [[ -n "${MOLMO_CHECKPOINT_PATH:-}" ]]; then
+    healthz "$MOLMO_PORT" && log "molmo :$MOLMO_PORT ok" || log "molmo :$MOLMO_PORT DOWN"
+  else
+    log "molmo skipped (MOLMO_CHECKPOINT_PATH unset)"
+  fi
   exit 0
 fi
 
@@ -87,4 +95,24 @@ start sam3 "$SAM3_PORT" python -m rpent.robots.components.sam3_server \
   --cuda-device "$CUDA_DEVICE" \
   --transport http --host 127.0.0.1 --port "$SAM3_PORT"
 wait_ready sam3 "$SAM3_PORT" 900
+
+if [[ -n "${MOLMO_CHECKPOINT_PATH:-}" ]]; then
+  [[ -e "$MOLMO_CHECKPOINT_PATH" ]] || die "MOLMO_CHECKPOINT_PATH not found: $MOLMO_CHECKPOINT_PATH"
+  molmo_py="${MOLMO_PYTHON:-$RS_ROOT/.venv-molmo/bin/python}"
+  if [[ ! -x "$molmo_py" ]]; then
+    die "Molmo interpreter not found ($molmo_py). From the repo root:
+  uv venv --python 3.11 .venv-molmo
+  uv pip install --python .venv-molmo/bin/python -e 'third_party/RPent[molmo]'"
+  fi
+  # Own process env: the LIBERO venv's transformers cannot import this server.
+  start molmo "$MOLMO_PORT" env \
+    PYTHONPATH="$RS_ROOT/third_party/RPent" \
+    MOLMO_CHECKPOINT_PATH="$MOLMO_CHECKPOINT_PATH" \
+    "$molmo_py" -m rpent.robots.components.molmo_server \
+    --cuda-device "$CUDA_DEVICE" \
+    --transport http --host 127.0.0.1 --port "$MOLMO_PORT"
+  wait_ready molmo "$MOLMO_PORT" 900
+else
+  log "molmo skipped (set MOLMO_CHECKPOINT_PATH for a Flash sweep)"
+fi
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader | sed 's/^/[rsched] GPU memory after load: /'

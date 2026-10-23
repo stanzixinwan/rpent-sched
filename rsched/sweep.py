@@ -2,9 +2,9 @@
 
     python -m rsched.sweep configs/p1_fifo_sweep.yaml [--levels 1 2 4] [--dry-run]
 
-The model services (Pi0.5, SAM3) must already be running (see
-``scripts/launch_services.sh``); loading them takes minutes, so they are shared
-across levels. For each level this script starts fresh proxies and a GPU
+The model services (Pi0.5, SAM3, and Molmo for Flash) must already be running
+(see ``scripts/launch_services.sh``); loading them takes minutes, so they are
+shared across levels. For each level this script starts fresh proxies and a GPU
 sampler, keeps N episodes in flight (closed loop) or launches them as a Poisson
 process, and writes everything under ``results/<name>/<stamp>/N<level>_r<rep>/``:
 
@@ -272,6 +272,8 @@ class Level:
             cmd += ["--vla-endpoint", endpoints["vla"]]
         if "sam3" in endpoints:
             cmd += ["--sam3-endpoint", endpoints["sam3"]]
+        if "molmo" in endpoints:
+            cmd += ["--molmo-endpoint", endpoints["molmo"]]
         cmd += [str(x) for x in r.get("extra_args", [])]
         return cmd
 

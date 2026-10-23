@@ -45,6 +45,9 @@ to `third_party/RPent`.
 | fact | source | why it matters here |
 |---|---|---|
 | `--planner flash` replays a stored plan; no LLM decisions | `docs/source-en/rst_source/guides/flash.rst` | zero API cost; VLA/simulator-bound workload |
-| Molmo2-8B localizes plan anchors; needs its own venv (newer `transformers`) | same | a third GPU model; extra service to launch |
+| `--planner flash` requires `--molmo-endpoint`; any other planner rejects it | `robots/libero/robot_spec.py:294` | the sweep forwards the endpoint only when a molmo service is configured |
+| Flash with `--memory-version auto` selects `GPT_5.5_xhigh` and does not read `--model` | `robots/libero/memory.py:84`, `rpent/planner/base.py:295` | the flash config pins that version and sets no model |
+| `molmo.ground` is a read-only RPC; the server loads Molmo2 in bf16 | `rpent/robots/components/molmo_server.py:109`, `:121` | proxy policy is passthrough; the weights share the GPU with Pi0.5 and SAM3 |
+| Molmo2-8B localizes plan anchors; needs its own venv (newer `transformers`) | `docs/source-en/rst_source/guides/flash.rst` | a third GPU model; extra service to launch |
 | Plans for 78 LIBERO-PRO tasks under `GPT_5.5_xhigh/flash/`; `goal_swap_t0` and `10_swap_t9` absent | same | task list for Flash sweeps |
 | Supported suites | `robots/libero/robot_spec.py:62` | config validation |

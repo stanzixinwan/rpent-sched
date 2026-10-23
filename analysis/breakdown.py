@@ -9,6 +9,7 @@ For every episode, wall-clock time is split into components that add up:
     vla_wait     VLA requests queued at the proxy
     vla_service  VLA inference at the backend
     sam3_wait / sam3_service   same for segmentation
+    molmo_wait / molmo_service   same for Molmo grounding (Flash only; zero otherwise)
     sim          simulator RPCs (env.step, chunk_step, ...)
     rpc_overhead client-side RPC time not explained by wait + service
                  (serialization, HTTP, image encoding)
@@ -38,12 +39,13 @@ FATAL_ERRORS = ("Credit balance is too low", "billing_error", "authentication_fa
 
 COMPONENTS = [
     "startup", "planner", "vla_wait", "vla_service", "sam3_wait", "sam3_service",
-    "sim", "rpc_overhead", "tool_other",
+    "molmo_wait", "molmo_service", "sim", "rpc_overhead", "tool_other",
 ]
+MODELS = ("vla", "sam3", "molmo")
 COLORS = {
     "startup": "#b8b8b8", "planner": "#4c72b0", "vla_wait": "#dd8452", "vla_service": "#c44e52",
-    "sam3_wait": "#ccb974", "sam3_service": "#8c8c3c", "sim": "#55a868",
-    "rpc_overhead": "#8172b3", "tool_other": "#64b5cd",
+    "sam3_wait": "#ccb974", "sam3_service": "#8c8c3c", "molmo_wait": "#e6a0c4",
+    "molmo_service": "#c17c9c", "sim": "#55a868", "rpc_overhead": "#8172b3", "tool_other": "#64b5cd",
 }
 
 
@@ -66,6 +68,8 @@ def service_of(method: str | None) -> str:
         return "vla"
     if method.startswith("sam3."):
         return "sam3"
+    if method.startswith("molmo."):
+        return "molmo"
     if method in ("healthz", "shutdown") or method.startswith("session."):
         return "control"
     return "sim"
@@ -106,12 +110,12 @@ def load_level(level_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
         comp["sim"] = client_by_svc.get("sim", 0.0)
         if not rpc_df.empty:
             mine = rpc_df[(rpc_df["episode"] == ep) & rpc_df["gated"]]
-            for svc in ("vla", "sam3"):
+            for svc in MODELS:
                 part = mine[mine["service"] == svc]
                 comp[f"{svc}_wait"] = float(part["wait_s"].sum())
                 comp[f"{svc}_service"] = float(part["service_s"].sum())
-        explained = sum(comp[f"{s}_{k}"] for s in ("vla", "sam3") for k in ("wait", "service"))
-        model_client = client_by_svc.get("vla", 0.0) + client_by_svc.get("sam3", 0.0)
+        explained = sum(comp[f"{s}_{k}"] for s in MODELS for k in ("wait", "service"))
+        model_client = sum(client_by_svc.get(s, 0.0) for s in MODELS)
         comp["rpc_overhead"] = max(model_client - explained, 0.0)
         in_tool_rpc = sum(client_by_svc.values())
         comp["tool_other"] = max(tool_union - in_tool_rpc, 0.0)

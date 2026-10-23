@@ -62,7 +62,7 @@ def test_sweep_and_breakdown(fake_services, tmp_path):
     assert (eps["cost_usd"] == 1.25).all()
 
     comps = ["startup", "planner", "vla_wait", "vla_service", "sam3_wait", "sam3_service",
-             "sim", "rpc_overhead", "tool_other"]
+             "molmo_wait", "molmo_service", "sim", "rpc_overhead", "tool_other"]
     gap = (eps[comps].sum(axis=1) - eps["wall_s"]).abs()
     assert (gap < 0.25 * eps["wall_s"] + 0.3).all(), "components should account for wall time"
     lv = levels.set_index("level")
