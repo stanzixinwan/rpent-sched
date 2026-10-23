@@ -106,9 +106,9 @@ if [[ -n "${MOLMO_CHECKPOINT_PATH:-}" ]]; then
   fi
   # Own process env: the LIBERO venv's transformers cannot import this server.
   start molmo "$MOLMO_PORT" env \
-    PYTHONPATH="$RS_ROOT/third_party/RPent" \
+    PYTHONPATH="$RS_ROOT:$RS_ROOT/third_party/RPent" \
     MOLMO_CHECKPOINT_PATH="$MOLMO_CHECKPOINT_PATH" \
-    "$molmo_py" -m rpent.robots.components.molmo_server \
+    "$molmo_py" -m rsched.molmo_server \
     --cuda-device "$CUDA_DEVICE" \
     --transport http --host 127.0.0.1 --port "$MOLMO_PORT"
   wait_ready molmo "$MOLMO_PORT" 900
