@@ -29,7 +29,10 @@ services:
     policy: passthrough
   molmo:
     backend: http://127.0.0.1:9002
-    policy: passthrough   # molmo.ground is a read-only RPC
+    # molmo.ground is a read-only RPC, but the server runs generate() under its
+    # own lock. Queue at the proxy so that waiting shows up as molmo_wait.
+    policy: fifo
+    max_inflight: 1
 
 episodes:
   # goal_swap task 0 and 10_swap task 9 have no Flash plan.

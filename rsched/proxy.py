@@ -44,7 +44,7 @@ from typing import Any
 from rsched import HDR_CALL, HDR_EPISODE, HDR_PRIORITY, HDR_TOOL
 from rsched.traceio import JsonlWriter, now
 
-DEFAULT_GATE_METHODS = ("vla.predict", "sam3.segment")
+DEFAULT_GATE_METHODS = ("vla.predict", "sam3.segment", "molmo.ground")
 POLICIES = ("passthrough", "fifo", "priority")
 
 

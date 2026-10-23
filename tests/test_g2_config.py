@@ -30,4 +30,11 @@ def test_flash_sweep_is_ready_for_a_cloud_gpu(tmp_path):
     assert cmd[cmd.index("--molmo-endpoint") + 1] == "http://molmo"
     assert "--model" not in cmd
     assert cfg["services"]["vla"]["policy"] == "fifo"
-    assert cfg["services"]["molmo"]["policy"] == "passthrough"
+    assert cfg["services"]["molmo"]["policy"] == "fifo"
+    assert cfg["services"]["molmo"].get("max_inflight", 1) == 1
+
+
+def test_proxy_gates_molmo():
+    from rsched.proxy import DEFAULT_GATE_METHODS
+
+    assert "molmo.ground" in DEFAULT_GATE_METHODS

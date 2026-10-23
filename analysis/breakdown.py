@@ -4,12 +4,16 @@
 
 For every episode, wall-clock time is split into components that add up:
 
-    startup      launch until the first tool call (simulator spawn + first plan)
-    planner      gaps between tool calls and after the last one (LLM time)
+    startup      launch until the first tool call or model RPC (simulator spawn + first plan)
+    planner      remaining time outside tools and RPCs (LLM time; for Flash, replay logic)
     vla_wait     VLA requests queued at the proxy
     vla_service  VLA inference at the backend
     sam3_wait / sam3_service   same for segmentation
     molmo_wait / molmo_service   same for Molmo grounding (Flash only; zero otherwise)
+
+Model and simulator RPCs made outside any tool after work starts (Flash
+replay calls molmo.ground and reads observations between tools) are charged
+to their service, not to planner.
     sim          simulator RPCs (env.step, chunk_step, ...)
     rpc_overhead client-side RPC time not explained by wait + service
                  (serialization, HTTP, image encoding)
@@ -96,15 +100,25 @@ def load_level(level_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
         tool_records += tools
 
         wall = end["t"] - start["t"]
-        tool_union = union_length([(t["t_start"], t["t_end"]) for t in tools])
-        startup = (min(t["t_start"] for t in tools) - start["t"]) if tools else wall
-        planner = max(wall - startup - tool_union, 0.0)
+        tool_iv = [(t["t_start"], t["t_end"]) for t in tools]
+        tool_union = union_length(tool_iv)
+        in_tool = [r for r in crpc if r.get("call_id")]
+        outside = [r for r in crpc if not r.get("call_id")
+                   and service_of(r.get("method")) not in ("control", "other")]
+        # Work starts at the first tool call or the first model RPC, whichever is
+        # earlier (Flash grounds its anchors with Molmo before the first tool).
+        firsts = [s for s, _ in tool_iv] + [
+            r["t_start"] for r in outside if service_of(r.get("method")) in MODELS]
+        work_start = min(firsts) if firsts else None
+        startup = (work_start - start["t"]) if work_start is not None else wall
+        between = [r for r in outside if work_start is not None and r["t_start"] >= work_start]
+        busy = union_length(tool_iv + [(r["t_start"], r["t_end"]) for r in between])
+        planner = max(wall - startup - busy, 0.0)
 
         comp = dict.fromkeys(COMPONENTS, 0.0)
         comp["startup"], comp["planner"] = startup, planner
-        in_tool = [r for r in crpc if r.get("call_id")]
         client_by_svc: dict[str, float] = {}
-        for r in in_tool:
+        for r in in_tool + between:
             svc = service_of(r.get("method"))
             client_by_svc[svc] = client_by_svc.get(svc, 0.0) + r["dur_s"]
         comp["sim"] = client_by_svc.get("sim", 0.0)
@@ -117,7 +131,7 @@ def load_level(level_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
         explained = sum(comp[f"{s}_{k}"] for s in MODELS for k in ("wait", "service"))
         model_client = sum(client_by_svc.get(s, 0.0) for s in MODELS)
         comp["rpc_overhead"] = max(model_client - explained, 0.0)
-        in_tool_rpc = sum(client_by_svc.values())
+        in_tool_rpc = sum(r["dur_s"] for r in in_tool)
         comp["tool_other"] = max(tool_union - in_tool_rpc, 0.0)
 
         task = outcome.get("task") or {}
@@ -130,6 +144,8 @@ def load_level(level_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
                 "agent_error": outcome.get("agent_error"), "exit_code": end.get("exit_code"),
                 "n_tools": len(tools),
                 "n_vla_calls": sum(1 for r in in_tool if service_of(r.get("method")) == "vla"),
+                "n_molmo_calls": sum(1 for r in in_tool + between
+                                     if service_of(r.get("method")) == "molmo"),
                 "input_tokens": stats.get("total_input_tokens"),
                 "output_tokens": stats.get("total_output_tokens"),
                 "cost_usd": stats.get("total_cost_usd"),
