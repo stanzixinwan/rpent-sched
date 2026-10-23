@@ -102,7 +102,7 @@ if [[ -n "${MOLMO_CHECKPOINT_PATH:-}" ]]; then
   if [[ ! -x "$molmo_py" ]]; then
     die "Molmo interpreter not found ($molmo_py). From the repo root:
   uv venv --python 3.11 .venv-molmo
-  uv pip install --python .venv-molmo/bin/python -e 'third_party/RPent[molmo]'"
+  uv pip install --python .venv-molmo/bin/python -e 'third_party/RPent[molmo]' 'transformers==4.57.1' einops accelerate"
   fi
   # Own process env: the LIBERO venv's transformers cannot import this server.
   start molmo "$MOLMO_PORT" env \
