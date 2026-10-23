@@ -58,10 +58,11 @@ Configs cap planner spend per episode (`--claude-code-max-budget-usd`).
 
 | component | meaning |
 |---|---|
-| `startup` | launch until first tool call (simulator spawn, memory, first plan) |
-| `planner` | gaps between tool calls (LLM time) |
+| `startup` | launch until first tool call or model RPC (simulator spawn, memory, first plan) |
+| `planner` | time outside tools and RPCs (LLM time; for Flash, replay logic) |
 | `vla_wait`, `vla_service` | VLA requests queued at the proxy / running at the backend |
 | `sam3_wait`, `sam3_service` | same for SAM3 |
+| `molmo_wait`, `molmo_service` | same for Molmo grounding (Flash only) |
 | `sim` | simulator RPCs made inside tools |
 | `rpc_overhead` | client RPC time not explained by wait + service |
 | `tool_other` | remaining tool time (scripted control, Python) |
