@@ -21,7 +21,9 @@ What gets patched (all inside this one ``rpent`` process):
     model requests, and logs client-side latency for every RPC, including the
     simulator's ``env_server`` calls (simulator time).
 ``RunFinalizationContext``
-    records the episode outcome, token usage, and elapsed time.
+    records the episode outcome, token usage, and elapsed time. LIBERO does not
+    define ``finalize_run``, and the CLI builds this context only when that hook
+    is set, so robots without one get a no-op. Their own finalizer is left as is.
 
 Validated against RPent commit ef70215 (see ``third_party/RPent``). If RPent's
 internals move, ``check_compat`` fails loudly instead of tracing silently wrong.
@@ -29,6 +31,7 @@ internals move, ``check_compat`` fails loudly instead of tracing silently wrong.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import json
 import os
@@ -55,10 +58,15 @@ def _jsonable(value: Any, limit: int = 2000) -> Any:
 
 def check_compat() -> None:
     """Fail fast if the RPent internals we hook have changed."""
+    import rpent.cli.main as cli
+    from rpent.robots.robot_spec import RobotSpec
     from rpent.tools.base import Tool
     from rpent.tools.toolkit import Toolkit
     from rpent.utils.rpc import http_rpc
 
+    spec_fields = (
+        {f.name for f in dataclasses.fields(RobotSpec)} if dataclasses.is_dataclass(RobotSpec) else set()
+    )
     missing = [
         n
         for n, ok in [
@@ -68,6 +76,9 @@ def check_compat() -> None:
             ("http_rpc._NumpyEncoder", hasattr(http_rpc, "_NumpyEncoder")),
             ("http_rpc._from_json", hasattr(http_rpc, "_from_json")),
             ("http_rpc.check_response", hasattr(http_rpc, "check_response")),
+            ("cli.get_robot_spec", hasattr(cli, "get_robot_spec")),
+            ("cli.RunFinalizationContext", hasattr(cli, "RunFinalizationContext")),
+            ("RobotSpec.finalize_run", "finalize_run" in spec_fields),
         ]
         if not ok
     ]
@@ -202,10 +213,29 @@ def install(trace: JsonlWriter, episode: str) -> None:
     http_rpc.HttpRpcClient.call = traced_call
 
 
+def _noop_finalize(_context: Any) -> None:
+    return None
+
+
+def _with_outcome_finalizer(spec: Any) -> Any:
+    """Return ``spec`` with a no-op ``finalize_run`` when the robot left it unset.
+
+    ``rpent.cli.main`` reads ``toolkit.solved()`` and builds
+    ``RunFinalizationContext`` only inside ``if robot_spec.finalize_run is not None``
+    (``main.py`` around the session cleanup and again after the transcript).
+    LIBERO's spec omits the hook, so without this the outcome record is never
+    written and ``environment_success`` stays ``None``.
+    """
+    if getattr(spec, "finalize_run", None) is not None:
+        return spec
+    return dataclasses.replace(spec, finalize_run=_noop_finalize)
+
+
 def _patch_finalization(trace: JsonlWriter, episode: str) -> None:
     import rpent.cli.main as cli
 
     orig_ctx = cli.RunFinalizationContext
+    orig_get_robot_spec = cli.get_robot_spec
 
     def ctx_factory(**kwargs):
         trace.write(
@@ -224,7 +254,11 @@ def _patch_finalization(trace: JsonlWriter, episode: str) -> None:
         )
         return orig_ctx(**kwargs)
 
+    def get_robot_spec(name: str):
+        return _with_outcome_finalizer(orig_get_robot_spec(name))
+
     cli.RunFinalizationContext = ctx_factory
+    cli.get_robot_spec = get_robot_spec
 
 
 def main(argv: list[str] | None = None) -> int:

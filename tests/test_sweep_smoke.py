@@ -56,6 +56,10 @@ def test_sweep_and_breakdown(fake_services, tmp_path):
     eps = pd.read_csv(out / "analysis" / "episodes.csv")
     levels = pd.read_csv(out / "analysis" / "levels.csv")
     assert len(eps) == 8 and set(levels["level"]) == {1, 4}
+    assert eps["success"].notna().all()
+    assert (eps["input_tokens"] == 1000).all()
+    assert (eps["output_tokens"] == 100).all()
+    assert (eps["cost_usd"] == 1.25).all()
 
     comps = ["startup", "planner", "vla_wait", "vla_service", "sam3_wait", "sam3_service",
              "sim", "rpc_overhead", "tool_other"]
