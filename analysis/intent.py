@@ -8,8 +8,10 @@ call returns:
     n_vla   client RPCs whose method starts with ``vla.`` for that call
     dur_s   the primitive's wall time (includes proxy queueing when N > 1)
 
-Three predictors. Intent and the fixed ratio are fit on the other episodes
-only, so the scored episode's labels are not in the fit.
+Four predictors. Intent and the fixed ratio are fit on the other episodes at
+the same concurrency level only (``--pool-levels`` fits across levels), so
+the scored episode's labels are not in the fit and queueing at another level
+does not leak into the estimate.
 
     intent       mean label of the same (tool, max_chunks) in the other
                  episodes. Missing bucket falls back to the same tool, then
@@ -20,6 +22,10 @@ only, so the scored episode's labels are not in the fit.
                  primitive has no previous call and uses the global mean.
     fixed_ratio  one mean for every primitive (ROSA-style constant
                  planner:VLA ratio).
+    intent_rate  dur_s only: intent's n_vla times this episode's latest
+                 observed seconds per VLA call (from its last primitive that
+                 called the VLA). Intent says how much work; the runtime says
+                 how fast it currently goes. Falls back to intent.
 
 A boundary is the first primitive of an episode, or a primitive whose tool
 differs from the previous one. The ``vla`` slice is every call of a tool that
@@ -46,7 +52,7 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rsched.traceio import read_jsonl  # noqa: E402
 
-PREDICTORS = ("intent", "last_round", "fixed_ratio")
+PREDICTORS = ("intent", "last_round", "fixed_ratio", "intent_rate")
 TARGETS = ("n_vla", "dur_s")
 
 
@@ -119,7 +125,7 @@ def _from_train(train: pd.DataFrame, tool: str, max_chunks: float, col: str) -> 
     return float(train[col].mean())
 
 
-def add_predictions(df: pd.DataFrame) -> pd.DataFrame:
+def add_predictions(df: pd.DataFrame, pool_levels: bool = False) -> pd.DataFrame:
     df = df.sort_values(["episode", "t_start"], kind="mergesort").reset_index(drop=True)
     grouped = df.groupby("episode", sort=False)
     df["prev_tool"] = grouped["tool"].shift(1)
@@ -131,9 +137,14 @@ def add_predictions(df: pd.DataFrame) -> pd.DataFrame:
         "pred_intent_n_vla", "pred_intent_dur_s",
         "pred_last_n_vla", "pred_last_dur_s",
         "pred_fixed_n_vla", "pred_fixed_dur_s",
+        "pred_intent_rate_n_vla", "pred_intent_rate_dur_s",
     )}
     for episode, part in df.groupby("episode", sort=False):
         train = df[df["episode"] != episode]
+        if not pool_levels:
+            same = train[train["level"] == part["level"].iloc[0]]
+            train = same if len(same) else train
+        sec_per_call = math.nan
         fixed_n = float(train["n_vla"].mean())
         fixed_d = float(train["dur_s"].mean())
         for row in part.itertuples(index=False):
@@ -143,13 +154,33 @@ def add_predictions(df: pd.DataFrame) -> pd.DataFrame:
             columns["pred_fixed_dur_s"].append(fixed_d)
             columns["pred_last_n_vla"].append(fixed_n if pd.isna(row.prev_n_vla) else float(row.prev_n_vla))
             columns["pred_last_dur_s"].append(fixed_d if pd.isna(row.prev_dur_s) else float(row.prev_dur_s))
+            intent_n = columns["pred_intent_n_vla"][-1]
+            columns["pred_intent_rate_n_vla"].append(intent_n)
+            rate_ok = intent_n > 0 and sec_per_call == sec_per_call
+            columns["pred_intent_rate_dur_s"].append(
+                intent_n * sec_per_call if rate_ok else columns["pred_intent_dur_s"][-1])
+            if row.n_vla > 0:  # observed after the call returns; used by later calls only
+                sec_per_call = row.dur_s / row.n_vla
     for name, values in columns.items():
         df[name] = values
     return df
 
 
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
+    """MAE and bias per target, predictor, and slice; per level and pooled."""
     vla_tools = set(df.loc[df["n_vla"] > 0, "tool"])
+    groups = [("all", df)]
+    if df["level"].nunique() > 1:
+        groups += [(str(lv), part) for lv, part in df.groupby("level", sort=True)]
+    out = []
+    for level, part in groups:
+        rows = _summarize_one(part.reset_index(drop=True), vla_tools)
+        rows.insert(0, "level", level)
+        out.append(rows)
+    return pd.concat(out, ignore_index=True)
+
+
+def _summarize_one(df: pd.DataFrame, vla_tools: set) -> pd.DataFrame:
     slices = {
         "all": np.ones(len(df), dtype=bool),
         "boundary": df["boundary"].to_numpy(dtype=bool),
@@ -157,13 +188,15 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
         "vla": df["tool"].isin(vla_tools).to_numpy(dtype=bool),
     }
     pred = {
-        "n_vla": ("pred_intent_n_vla", "pred_last_n_vla", "pred_fixed_n_vla"),
-        "dur_s": ("pred_intent_dur_s", "pred_last_dur_s", "pred_fixed_dur_s"),
+        "n_vla": ("pred_intent_n_vla", "pred_last_n_vla", "pred_fixed_n_vla", "pred_intent_rate_n_vla"),
+        "dur_s": ("pred_intent_dur_s", "pred_last_dur_s", "pred_fixed_dur_s", "pred_intent_rate_dur_s"),
     }
     rows = []
     for target in TARGETS:
         actual = df[target].to_numpy(dtype=float)
         for name, column in zip(PREDICTORS, pred[target]):
+            if target == "n_vla" and name == "intent_rate":
+                continue  # identical to intent for counts
             error = df[column].to_numpy(dtype=float) - actual
             for slice_name, mask in slices.items():
                 if not mask.any():
@@ -183,11 +216,11 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_mae(summary: pd.DataFrame, path: Path) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.4))
+    fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.4))
     x = np.arange(len(PREDICTORS))
     width = 0.36
     for ax, target, ylabel in zip(axes, TARGETS, ("MAE (VLA calls)", "MAE (seconds)")):
-        part = summary[summary["target"] == target]
+        part = summary[(summary["target"] == target) & (summary["level"] == "all")]
         for offset, slice_name, color in ((-width / 2, "all", "#4c72b0"), (width / 2, "boundary", "#c44e52")):
             rows = part[part["slice"] == slice_name].set_index("predictor").reindex(list(PREDICTORS))
             ax.bar(x + offset, rows["mae"].to_numpy(), width=width, label=slice_name, color=color)
@@ -205,6 +238,8 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Compare intent, last-round, and fixed-ratio VLA-demand predictors.")
     ap.add_argument("sweep_dir")
     ap.add_argument("--out", default=None, help="default: <sweep_dir>/analysis")
+    ap.add_argument("--pool-levels", action="store_true",
+                    help="fit intent and fixed_ratio across concurrency levels (old behaviour)")
     args = ap.parse_args(argv)
 
     root = Path(args.sweep_dir)
@@ -214,7 +249,7 @@ def main(argv: list[str] | None = None) -> None:
         n = 0 if primitives.empty else int(primitives["episode"].nunique())
         sys.exit(f"need tool calls from at least 2 episodes under {root} (found {n})")
 
-    predicted = add_predictions(primitives)
+    predicted = add_predictions(primitives, pool_levels=args.pool_levels)
     summary = summarize(predicted)
     out.mkdir(parents=True, exist_ok=True)
     keep = [c for c in predicted.columns if not c.startswith("prev_")]
@@ -228,6 +263,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     print("intent = mean of the same (tool, max_chunks) on other episodes")
     print("last_round = previous primitive in this episode; fixed_ratio = one mean for every primitive")
+    print("intent_rate = intent n_vla x this episode's latest seconds per VLA call (dur_s only)")
+    print("fit: " + ("pooled across levels" if args.pool_levels else "same concurrency level only"))
     print("boundary = first primitive, or a different tool from the previous one")
     print("vla = calls of a tool that makes at least one vla.* RPC in this sweep")
     with pd.option_context("display.width", 120, "display.float_format", "{:.3f}".format):
