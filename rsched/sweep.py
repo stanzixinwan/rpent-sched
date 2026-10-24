@@ -120,6 +120,32 @@ def gpu_info() -> list[str]:
         return []
 
 
+def _read(path: str) -> str | None:
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return None
+
+
+def cpu_info() -> dict:
+    """CPU visibility vs. quota. In containers ``os.cpu_count()`` is the host's
+    count, so OpenMP/torch size their thread pools for cores the cgroup does
+    not grant; ``cpu.stat`` throttle counters show the cost."""
+    stat = _read("/sys/fs/cgroup/cpu.stat") or ""
+    return {
+        "os_cpu_count": os.cpu_count(),
+        "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
+        "cgroup_cpu_max": _read("/sys/fs/cgroup/cpu.max"),
+        "cgroup_cpu_stat": dict(
+            (k, int(v)) for k, v in (line.split() for line in stat.splitlines() if line.strip())
+        ),
+        "thread_env": {k: os.environ[k] for k in THREAD_VARS if k in os.environ},
+    }
+
+
+THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+
+
 def wait_http(url: str, timeout_s: float = 30.0) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -296,7 +322,9 @@ class Level:
         t0 = time.time()
 
         def launch(spec: EpisodeSpec) -> None:
-            env = {"RS_EPISODE_ID": spec.episode_id, "RS_TRACE_DIR": str(self.out / "traces")}
+            # episode_env (e.g. thread caps) reaches rpent and the env_server it spawns.
+            env = {k: str(v) for k, v in (self.cfg.get("episode_env") or {}).items()}
+            env.update({"RS_EPISODE_ID": spec.episode_id, "RS_TRACE_DIR": str(self.out / "traces")})
             p = self._spawn(f"episode_{spec.episode_id}", self.episode_cmd(spec, endpoints), env)
             running[spec.episode_id] = (p, time.time())
             print(f"  start {spec.episode_id} {spec.suite} task={spec.task} seed={spec.seed} "
@@ -402,8 +430,10 @@ def main(argv: list[str] | None = None) -> None:
                 "rpent_commit": git_rev(REPO_ROOT / "third_party" / "RPent"),
                 "host": platform.node(), "platform": platform.platform(),
                 "python": sys.version.split()[0], "gpus": gpu_info(),
+                "episode_env": cfg.get("episode_env") or {}, "cpu_start": cpu_info(),
             }
             manifest.update(Level(cfg, level, rep, out, args.dry_run).run())
+            manifest["cpu_end"] = cpu_info()
             (out / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
             if manifest["aborted"]:
                 sys.exit(f"SWEEP ABORTED at N={level}: {manifest['aborted']}")

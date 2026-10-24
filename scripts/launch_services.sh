@@ -13,6 +13,10 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
+# Containers report the host's cores (e.g. 128) to OpenMP/torch while the
+# cgroup grants far fewer; cap each service's CPU thread pools.
+export OMP_NUM_THREADS="${SERVICE_THREADS:-4}" MKL_NUM_THREADS="${SERVICE_THREADS:-4}"
+
 healthz() {  # $1 = port
   python - "$1" <<'PY'
 import json, sys, urllib.request

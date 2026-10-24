@@ -6,7 +6,7 @@
 #   python -m rsched.sweep configs/g2_flash.yaml
 #   python analysis/breakdown.py results/g2_flash/<stamp>
 #
-# 16 episodes at each of N = 1, 4, 16 (48 episodes). RPent's published Flash
+# 16 episodes at each of N = 1, 4, 8, 16 (64 episodes). RPent's published Flash
 # mean is about 60 s per episode; that is their number, not a measurement
 # here. Queueing at the higher levels is what this run is for. Backends must
 # match VLA_PORT, SAM3_PORT, and MOLMO_PORT.
@@ -42,10 +42,20 @@ episodes:
     - {suite: libero_spatial_swap, task: 1, seed: 0}
     - {suite: libero_10_swap,      task: 3, seed: 0}
 
-concurrency: [1, 4, 16]
+# Cap BLAS/OpenMP pools in every episode process and the env_server it spawns.
+# In a container os.cpu_count() reports the host (e.g. 128) while the cgroup
+# grants 16-24 vCPUs; uncapped, each process sizes its pools for the host.
+# configs/g2_flash_uncapped.yaml is the control for this choice.
+episode_env:
+  OMP_NUM_THREADS: 1
+  MKL_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
+  NUMEXPR_NUM_THREADS: 1
+
+concurrency: [1, 4, 8, 16]
 episodes_per_level: 16
 repeats: 1
-episode_timeout_s: 1800
+episode_timeout_s: 3600
 arrival: {mode: closed}
 gpu_sampler: true
 gpu_interval_s: 0.5
