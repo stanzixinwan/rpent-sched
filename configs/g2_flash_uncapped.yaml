@@ -1,0 +1,53 @@
+# G2 control (thread caps off), N=4 only. Otherwise identical to g2_flash.yaml.
+# G2: plan-once Flash sweep on a cloud GPU. No planner API calls.
+# Pi0.5, SAM3, and Molmo share one GPU. Not the 16 GB laptop.
+#
+#   # env/.env: MOLMO_CHECKPOINT_PATH and MOLMO_PYTHON (see env/.env.example)
+#   bash scripts/launch_services.sh
+#   python -m rsched.sweep configs/g2_flash.yaml
+#   python analysis/breakdown.py results/g2_flash/<stamp>
+#
+# 16 episodes at each of N = 1, 4, 8, 16 (64 episodes). RPent's published Flash
+# mean is about 60 s per episode; that is their number, not a measurement
+# here. Queueing at the higher levels is what this run is for. Backends must
+# match VLA_PORT, SAM3_PORT, and MOLMO_PORT.
+name: g2_flash_uncapped
+
+rpent:
+  robot: libero
+  libero_type: pro
+  planner: flash
+  cuda_device: 0
+  extra_args: ["--memory-version", "GPT_5.5_xhigh"]
+
+services:
+  vla:
+    backend: http://127.0.0.1:9000
+    policy: fifo
+    max_inflight: 1
+  sam3:
+    backend: http://127.0.0.1:9001
+    policy: passthrough
+  molmo:
+    backend: http://127.0.0.1:9002
+    # molmo.ground is a read-only RPC, but the server runs generate() under its
+    # own lock. Queue at the proxy so that waiting shows up as molmo_wait.
+    policy: fifo
+    max_inflight: 1
+
+episodes:
+  # goal_swap task 0 and 10_swap task 9 have no Flash plan.
+  list:
+    - {suite: libero_object_swap,  task: 2, seed: 0}
+    - {suite: libero_goal_swap,    task: 1, seed: 0}
+    - {suite: libero_spatial_swap, task: 1, seed: 0}
+    - {suite: libero_10_swap,      task: 3, seed: 0}
+
+# Control for g2_flash.yaml: same run, no thread caps (episode_env unset).
+concurrency: [4]
+episodes_per_level: 16
+repeats: 1
+episode_timeout_s: 3600
+arrival: {mode: closed}
+gpu_sampler: true
+gpu_interval_s: 0.5

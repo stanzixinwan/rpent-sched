@@ -12,7 +12,8 @@ def test_flash_sweep_is_ready_for_a_cloud_gpu(tmp_path):
     cfg = yaml.safe_load((ROOT / "configs" / "g2_flash.yaml").read_text())
     assert cfg["rpent"]["planner"] == "flash"
     assert "model" not in cfg["rpent"]
-    assert cfg["concurrency"] == [1, 4, 16]
+    assert cfg["concurrency"] == [1, 4, 8, 16]
+    assert cfg["episode_env"]["OMP_NUM_THREADS"] == 1
     assert cfg["episodes_per_level"] >= 16
     assert preflight_planner(cfg) is None
 
@@ -38,3 +39,22 @@ def test_proxy_gates_molmo():
     from rsched.proxy import DEFAULT_GATE_METHODS
 
     assert "molmo.ground" in DEFAULT_GATE_METHODS
+
+
+def test_uncapped_control_differs_only_in_threads_and_levels():
+    capped = yaml.safe_load((ROOT / "configs" / "g2_flash.yaml").read_text())
+    ctl = yaml.safe_load((ROOT / "configs" / "g2_flash_uncapped.yaml").read_text())
+    assert "episode_env" not in ctl and ctl["concurrency"] == [4]
+    drop = {"name", "episode_env", "concurrency"}
+    assert {k: v for k, v in capped.items() if k not in drop} == \
+           {k: v for k, v in ctl.items() if k not in drop}
+
+
+def test_cpu_info_is_jsonable():
+    import json
+
+    from rsched.sweep import cpu_info
+
+    info = cpu_info()
+    json.dumps(info)
+    assert info["os_cpu_count"] >= 1
