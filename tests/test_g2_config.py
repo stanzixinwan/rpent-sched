@@ -58,3 +58,23 @@ def test_cpu_info_is_jsonable():
     info = cpu_info()
     json.dumps(info)
     assert info["os_cpu_count"] >= 1
+
+
+def test_cpu_info_reads_cgroup_v1_and_v2(tmp_path):
+    from rsched.sweep import cpu_info
+
+    v1 = tmp_path / "v1"
+    (v1 / "cpu,cpuacct").mkdir(parents=True)
+    (v1 / "cpu,cpuacct" / "cpu.cfs_quota_us").write_text("1600000\n")
+    (v1 / "cpu,cpuacct" / "cpu.cfs_period_us").write_text("100000\n")
+    (v1 / "cpu,cpuacct" / "cpu.stat").write_text("nr_periods 10\nnr_throttled 3\nthrottled_time 5\n")
+    info = cpu_info(str(v1))
+    assert info["cgroup_cpu_max"] == "1600000 100000"
+    assert info["cgroup_cpu_stat"]["nr_throttled"] == 3
+
+    v2 = tmp_path / "v2"
+    v2.mkdir()
+    (v2 / "cpu.max").write_text("2400000 100000\n")
+    (v2 / "cpu.stat").write_text("nr_throttled 7\n")
+    assert cpu_info(str(v2))["cgroup_cpu_stat"]["nr_throttled"] == 7
+    assert cpu_info(str(tmp_path / "none"))["cgroup_cpu_max"] is None

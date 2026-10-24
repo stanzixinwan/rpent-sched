@@ -127,15 +127,29 @@ def _read(path: str) -> str | None:
         return None
 
 
-def cpu_info() -> dict:
+def _cgroup_cpu(root: str = "/sys/fs/cgroup") -> tuple[str | None, str]:
+    """(quota, cpu.stat text). cgroup v2 has ``cpu.max``; v1 (RunPod, older
+    Docker) has ``cpu.cfs_quota_us``/``cpu.cfs_period_us`` under ``cpu/`` or
+    ``cpu,cpuacct/``. The quota is reported in v2 form: "<quota> <period>"."""
+    quota = _read(f"{root}/cpu.max")
+    if quota is not None:
+        return quota, _read(f"{root}/cpu.stat") or ""
+    for sub in ("cpu", "cpu,cpuacct"):
+        q, per = _read(f"{root}/{sub}/cpu.cfs_quota_us"), _read(f"{root}/{sub}/cpu.cfs_period_us")
+        if q is not None and per is not None:
+            return ("max" if q == "-1" else q) + " " + per, _read(f"{root}/{sub}/cpu.stat") or ""
+    return None, ""
+
+
+def cpu_info(root: str = "/sys/fs/cgroup") -> dict:
     """CPU visibility vs. quota. In containers ``os.cpu_count()`` is the host's
     count, so OpenMP/torch size their thread pools for cores the cgroup does
     not grant; ``cpu.stat`` throttle counters show the cost."""
-    stat = _read("/sys/fs/cgroup/cpu.stat") or ""
+    quota, stat = _cgroup_cpu(root)
     return {
         "os_cpu_count": os.cpu_count(),
         "affinity": len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
-        "cgroup_cpu_max": _read("/sys/fs/cgroup/cpu.max"),
+        "cgroup_cpu_max": quota,
         "cgroup_cpu_stat": dict(
             (k, int(v)) for k, v in (line.split() for line in stat.splitlines() if line.strip())
         ),
