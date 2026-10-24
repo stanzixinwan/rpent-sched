@@ -49,6 +49,7 @@ to `third_party/RPent`.
 | Flash with `--memory-version auto` selects `GPT_5.5_xhigh` and does not read `--model` | `robots/libero/memory.py:84`, `rpent/planner/base.py:295` | the flash config pins that version and sets no model |
 | `molmo.ground` is a read-only RPC, but `generate` runs under the server's own lock; Molmo2 loads in bf16 | `rpent/robots/components/molmo_server.py:109`, `:121`, `:148` | requests are serialized anyway, so the proxy queues them (fifo, 1 in flight) to make the wait visible; the weights share the GPU with Pi0.5 and SAM3 |
 | Flash replay calls `molmo.ground` and reads observations between tool calls, not inside them | `robots/libero/flash/replay.py:123`, `:134`, `:202` | `breakdown.py` charges RPCs outside tools to their service, not to `planner` |
+| `_parse_point` expects `coords="<id> <x> <y>"`; our Molmo2-8B emits `"<image> <id> <x> <y>"`, so the point became `(id, x)` | `rpent/robots/components/molmo_server.py:51`, `:55` | every anchor sat on the left image edge (G2 N=1: 0/16 solved). `rsched.molmo_server` swaps in a parser for both formats; `launch_services.sh` starts that |
 | Molmo2-8B localizes plan anchors; needs its own venv (newer `transformers`) | `docs/source-en/rst_source/guides/flash.rst` | a third GPU model; extra service to launch |
 | Plans for 78 LIBERO-PRO tasks under `GPT_5.5_xhigh/flash/`; `goal_swap_t0` and `10_swap_t9` absent | same | task list for Flash sweeps |
 | Supported suites | `robots/libero/robot_spec.py:62` | config validation |
