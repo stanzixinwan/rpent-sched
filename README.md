@@ -54,6 +54,14 @@ on planner billing/auth errors and after two consecutive episodes with no tool
 call. Each level writes `manifest.json` (config, commits, host, GPU, timings).
 Configs cap planner spend per episode (`--claude-code-max-budget-usd`).
 
+**CPU threads.** In a container, `os.cpu_count()` reports the host (e.g. 128)
+while the cgroup grants far fewer CPUs, so every process sizes its OpenMP/BLAS
+pools for cores it does not have. In G2 this made `env.step` 60x slower at N=4.
+Configs therefore set `episode_env` (thread caps for each episode and its
+`env_server`), and `launch_services.sh` caps each service with `SERVICE_THREADS`
+(default 4; 2 on a 13.6-CPU pod). Each manifest records the cgroup CPU quota
+and throttle counters at level start and end (`cpu_start`, `cpu_end`).
+
 `breakdown.py` splits each episode's wall time into components that sum to it:
 
 | component | meaning |

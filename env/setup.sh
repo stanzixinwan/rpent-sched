@@ -18,6 +18,10 @@ if [[ "$RS_ROOT" == /mnt/* ]]; then
   (/mnt/* breaks git file modes and line endings, and is much slower for pip and MuJoCo)"
 fi
 
+# Some images (e.g. RunPod) set this without installing hf_transfer; every
+# Hugging Face download then fails. Plain downloads are fine.
+unset HF_HUB_ENABLE_HF_TRANSFER
+
 command -v uv >/dev/null || die "uv not found: curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 log "submodules (RPent pinned at $(git -C third_party/RPent rev-parse --short HEAD 2>/dev/null || echo '?'))"
