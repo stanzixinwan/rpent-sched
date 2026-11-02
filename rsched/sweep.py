@@ -12,6 +12,7 @@ process, and writes everything under ``results/<name>/<stamp>/N<level>_r<rep>/``
     proxy_vla.jsonl         per-request trace from the VLA proxy
     proxy_sam3.jsonl        per-request trace from the SAM3 proxy
     gpu.jsonl               GPU memory / utilization samples
+    history.jsonl           work of each finished episode (history scheduling)
     traces/episode_*.jsonl  per-episode tool calls, client RPCs, outcome
     episodes/<id>/          RPent's own output directory per episode
     logs/                   stdout/stderr of every process
@@ -203,6 +204,27 @@ def episode_pool(cfg: dict) -> list[tuple[str, int, int]]:
     return pool
 
 
+SCHED_MODES = ("none", "intent_srpt", "intent_lrpt", "history_srpt", "history_lrpt")
+
+
+def scheduling(cfg: dict) -> dict:
+    """``scheduling: {mode, costs}`` with defaults; checks the proxies can act on it.
+
+    Any mode other than ``none`` sends ``X-RS-Priority``, which only the proxy's
+    ``priority`` policy reads. With ``mode: none`` a ``priority`` proxy serves in
+    arrival order, so one config can run every mode through the same code path.
+    """
+    sched = {"mode": "none", "costs": {}, **(cfg.get("scheduling") or {})}
+    if sched["mode"] not in SCHED_MODES:
+        raise ValueError(f"scheduling.mode {sched['mode']!r}; choose from {SCHED_MODES}")
+    if sched["mode"] != "none":
+        wrong = [svc for svc in ("vla", "molmo") if svc in cfg["services"]
+                 and cfg["services"][svc].get("policy", "fifo") != "priority"]
+        if wrong:
+            raise ValueError(f"scheduling.mode={sched['mode']} needs policy: priority on {wrong}")
+    return sched
+
+
 # ---------------------------------------------------------------------------
 # one level
 # ---------------------------------------------------------------------------
@@ -335,10 +357,14 @@ class Level:
         next_arrival = time.time()
         t0 = time.time()
 
+        sched = scheduling(self.cfg)
+
         def launch(spec: EpisodeSpec) -> None:
             # episode_env (e.g. thread caps) reaches rpent and the env_server it spawns.
             env = {k: str(v) for k, v in (self.cfg.get("episode_env") or {}).items()}
-            env.update({"RS_EPISODE_ID": spec.episode_id, "RS_TRACE_DIR": str(self.out / "traces")})
+            env.update({"RS_EPISODE_ID": spec.episode_id, "RS_TRACE_DIR": str(self.out / "traces"),
+                        "RS_SCHED": sched["mode"], "RS_COSTS": json.dumps(sched["costs"]),
+                        "RS_HISTORY_FILE": str(self.out / "history.jsonl")})
             p = self._spawn(f"episode_{spec.episode_id}", self.episode_cmd(spec, endpoints), env)
             running[spec.episode_id] = (p, time.time())
             print(f"  start {spec.episode_id} {spec.suite} task={spec.task} seed={spec.seed} "
@@ -415,6 +441,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("config")
     ap.add_argument("--levels", type=int, nargs="*", help="override concurrency levels")
     ap.add_argument("--repeats", type=int, help="override repeats")
+    ap.add_argument("--repeat-index", type=int, default=0,
+                    help="number the first repeat k (directories N<level>_r<k>); for drivers")
+    ap.add_argument("--sched", choices=SCHED_MODES, help="override scheduling.mode")
     ap.add_argument("--out", default=None, help="output root (default results/<name>/<stamp>)")
     ap.add_argument("--dry-run", action="store_true", help="print commands, run nothing")
     ap.add_argument("--skip-preflight", action="store_true", help="skip the planner credential check")
@@ -424,6 +453,9 @@ def main(argv: list[str] | None = None) -> None:
     if loaded:
         print(f"loaded from env/.env: {', '.join(sorted(loaded))}")
     cfg = yaml.safe_load(Path(args.config).read_text())
+    if args.sched:
+        cfg["scheduling"] = {**(cfg.get("scheduling") or {}), "mode": args.sched}
+    sched = scheduling(cfg)
     if not (args.dry_run or args.skip_preflight):
         preflight_planner(cfg)
     levels = args.levels or cfg["concurrency"]
@@ -431,9 +463,9 @@ def main(argv: list[str] | None = None) -> None:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     root = Path(args.out) if args.out else REPO_ROOT / "results" / cfg["name"] / stamp
     root.mkdir(parents=True, exist_ok=True)
-    (root / "config.yaml").write_text(Path(args.config).read_text())
+    (root / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
 
-    for rep in range(repeats):
+    for rep in range(args.repeat_index, args.repeat_index + repeats):
         for level in levels:
             out = root / f"N{level}_r{rep}"
             out.mkdir(parents=True, exist_ok=True)
@@ -444,7 +476,8 @@ def main(argv: list[str] | None = None) -> None:
                 "rpent_commit": git_rev(REPO_ROOT / "third_party" / "RPent"),
                 "host": platform.node(), "platform": platform.platform(),
                 "python": sys.version.split()[0], "gpus": gpu_info(),
-                "episode_env": cfg.get("episode_env") or {}, "cpu_start": cpu_info(),
+                "episode_env": cfg.get("episode_env") or {}, "scheduling": sched,
+                "cpu_start": cpu_info(),
             }
             manifest.update(Level(cfg, level, rep, out, args.dry_run).run())
             manifest["cpu_end"] = cpu_info()

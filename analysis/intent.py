@@ -8,10 +8,13 @@ call returns:
     n_vla   client RPCs whose method starts with ``vla.`` for that call
     dur_s   the primitive's wall time (includes proxy queueing when N > 1)
 
-Four predictors. Intent and the fixed ratio are fit on the other episodes at
-the same concurrency level only (``--pool-levels`` fits across levels), so
-the scored episode's labels are not in the fit and queueing at another level
-does not leak into the estimate.
+Four predictors. Intent and the fixed ratio are fit on the other **tasks** at
+the same concurrency level only, so neither the scored episode nor copies of
+its task (same suite and task, any seed) are in the fit, and queueing at
+another level does not leak into the estimate. ``--holdout episode`` restores
+the old leave-one-episode-out fit, which is optimistic when a task repeats;
+``--pool-levels`` fits across levels. Task ids come from each level's
+``manifest.json``; episodes without one fall back to their own id.
 
     intent       mean label of the same (tool, max_chunks) in the other
                  episodes. Missing bucket falls back to the same tool, then
@@ -80,6 +83,8 @@ def load_primitives(root: Path) -> tuple[pd.DataFrame, int, int]:
     unattributed = 0
     for level_dir in level_dirs(root):
         manifest = json.loads((level_dir / "manifest.json").read_text())
+        task_of = {s["episode_id"]: f"{s['suite']}_t{s['task']}" for s in manifest.get("specs") or []
+                   if "episode_id" in s}
         trace_dir = level_dir / "traces"
         files = sorted(trace_dir.glob("episode_*.jsonl")) if trace_dir.is_dir() else []
         for path in files:
@@ -103,6 +108,7 @@ def load_primitives(root: Path) -> tuple[pd.DataFrame, int, int]:
                         "level": manifest.get("level"),
                         "repeat": manifest.get("repeat"),
                         "episode": tool.get("episode"),
+                        "task": task_of.get(tool.get("episode"), tool.get("episode")),
                         "call_id": tool.get("call_id"),
                         "t_start": tool.get("t_start"),
                         "tool": tool.get("tool"),
@@ -125,7 +131,7 @@ def _from_train(train: pd.DataFrame, tool: str, max_chunks: float, col: str) -> 
     return float(train[col].mean())
 
 
-def add_predictions(df: pd.DataFrame, pool_levels: bool = False) -> pd.DataFrame:
+def add_predictions(df: pd.DataFrame, pool_levels: bool = False, holdout: str = "task") -> pd.DataFrame:
     df = df.sort_values(["episode", "t_start"], kind="mergesort").reset_index(drop=True)
     grouped = df.groupby("episode", sort=False)
     df["prev_tool"] = grouped["tool"].shift(1)
@@ -139,8 +145,11 @@ def add_predictions(df: pd.DataFrame, pool_levels: bool = False) -> pd.DataFrame
         "pred_fixed_n_vla", "pred_fixed_dur_s",
         "pred_intent_rate_n_vla", "pred_intent_rate_dur_s",
     )}
+    if holdout not in ("task", "episode"):
+        raise ValueError(f"holdout must be 'task' or 'episode', not {holdout!r}")
+    key = "task" if holdout == "task" and "task" in df else "episode"
     for episode, part in df.groupby("episode", sort=False):
-        train = df[df["episode"] != episode]
+        train = df[df[key] != part[key].iloc[0]]
         if not pool_levels:
             same = train[train["level"] == part["level"].iloc[0]]
             train = same if len(same) else train
@@ -240,6 +249,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default=None, help="default: <sweep_dir>/analysis")
     ap.add_argument("--pool-levels", action="store_true",
                     help="fit intent and fixed_ratio across concurrency levels (old behaviour)")
+    ap.add_argument("--holdout", choices=("task", "episode"), default="task",
+                    help="leave out the scored episode's whole task (default) or only the episode")
     args = ap.parse_args(argv)
 
     root = Path(args.sweep_dir)
@@ -249,7 +260,7 @@ def main(argv: list[str] | None = None) -> None:
         n = 0 if primitives.empty else int(primitives["episode"].nunique())
         sys.exit(f"need tool calls from at least 2 episodes under {root} (found {n})")
 
-    predicted = add_predictions(primitives, pool_levels=args.pool_levels)
+    predicted = add_predictions(primitives, pool_levels=args.pool_levels, holdout=args.holdout)
     summary = summarize(predicted)
     out.mkdir(parents=True, exist_ok=True)
     keep = [c for c in predicted.columns if not c.startswith("prev_")]
@@ -261,7 +272,7 @@ def main(argv: list[str] | None = None) -> None:
         f"episodes: {predicted['episode'].nunique()}  primitives: {len(predicted)}  "
         f"skipped_no_tools: {skipped}  unattributed_vla_rpcs: {unattributed}"
     )
-    print("intent = mean of the same (tool, max_chunks) on other episodes")
+    print(f"intent = mean of the same (tool, max_chunks) on other {args.holdout}s")
     print("last_round = previous primitive in this episode; fixed_ratio = one mean for every primitive")
     print("intent_rate = intent n_vla x this episode's latest seconds per VLA call (dur_s only)")
     print("fit: " + ("pooled across levels" if args.pool_levels else "same concurrency level only"))

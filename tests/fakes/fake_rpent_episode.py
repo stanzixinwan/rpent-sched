@@ -133,6 +133,9 @@ def fake_main() -> int:
         ("segment", {"text_prompt": "plate"}),
         ("pi0_pick", {"prompt": f"place it {args.task}", "max_chunks": 8}),
     ]
+    # Like Flash replay: the program is known before the first tool runs.
+    launch.set_program({"plan": [{"action": n, "arguments": a} for n, a in plan],
+                        "reference": {}, "locator_of": {}}, f"fake_{args.suite}_t{args.task}")
     for name, params in plan:
         time.sleep(think)  # planner (LLM) time
         toolkit.execute_tool(name, params)
