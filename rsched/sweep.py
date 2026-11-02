@@ -69,6 +69,23 @@ def load_env_file(path: Path) -> list[str]:
     return loaded
 
 
+def drop_broken_hf_transfer() -> bool:
+    """Unset ``HF_HUB_ENABLE_HF_TRANSFER`` when ``hf_transfer`` is not installed.
+
+    Some images (RunPod) set it in every new shell, tmux included. Episodes sync
+    their memory (Flash plans) from Hugging Face at start, and with the flag
+    but no package every download raises, so every episode crashed.
+    """
+    import importlib.util
+
+    flag = os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "").strip().lower()
+    if flag in ("", "0", "false", "no", "off") or importlib.util.find_spec("hf_transfer") is not None:
+        return False
+    os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER")
+    print("unset HF_HUB_ENABLE_HF_TRANSFER: hf_transfer is not installed, downloads would fail")
+    return True
+
+
 PLANNER_KEY_ENV = {"claude_code": "ANTHROPIC_API_KEY", "codex": "OPENAI_API_KEY"}
 
 
@@ -452,6 +469,7 @@ def main(argv: list[str] | None = None) -> None:
     loaded = load_env_file(REPO_ROOT / "env" / ".env")
     if loaded:
         print(f"loaded from env/.env: {', '.join(sorted(loaded))}")
+    drop_broken_hf_transfer()
     cfg = yaml.safe_load(Path(args.config).read_text())
     if args.sched:
         cfg["scheduling"] = {**(cfg.get("scheduling") or {}), "mode": args.sched}

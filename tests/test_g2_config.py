@@ -78,3 +78,15 @@ def test_cpu_info_reads_cgroup_v1_and_v2(tmp_path):
     (v2 / "cpu.stat").write_text("nr_throttled 7\n")
     assert cpu_info(str(v2))["cgroup_cpu_stat"]["nr_throttled"] == 7
     assert cpu_info(str(tmp_path / "none"))["cgroup_cpu_max"] is None
+
+
+def test_broken_hf_transfer_flag_is_dropped(monkeypatch):
+    import importlib.util
+
+    from rsched.sweep import drop_broken_hf_transfer
+
+    monkeypatch.setenv("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    assert drop_broken_hf_transfer() is True
+    assert "HF_HUB_ENABLE_HF_TRANSFER" not in __import__("os").environ
+    assert drop_broken_hf_transfer() is False  # nothing left to drop
