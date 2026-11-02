@@ -79,16 +79,45 @@ Outputs: `episodes.csv`, `levels.csv`, `tools.csv`, `breakdown.png`,
 `vla_wait_cdf.png`. Proxy policies: `passthrough` (RPent's own unordered
 behaviour), `fifo`, `priority` with aging (reads the `X-RS-Priority` header).
 
+## Intent scheduling (G3)
+
+A Flash plan states, before the episode starts, every primitive it will run,
+each pick's chunk budget (`max_chunks`), and every anchor Molmo will ground.
+`rsched/intent.py` counts that work down as the episode runs and prices it in
+seconds (per-primitive costs from G2 at N=1). With `scheduling.mode` (or
+`--sched`) set, every model request carries the estimate as `X-RS-Priority`,
+and the VLA and Molmo proxies (`policy: priority`) serve the smallest first:
+
+| mode | order |
+|---|---|
+| `none` | arrival order (FIFO; no header) |
+| `intent_srpt` / `intent_lrpt` | least / most remaining work in the plan first |
+| `history_srpt` / `history_lrpt` | same, but remaining = mean work of episodes already finished in this run minus work done |
+
+```bash
+bash scripts/launch_services.sh
+bash scripts/run_g3.sh                       # modes x N=8,16 x 3 repeats; resumable
+python analysis/g3_compare.py results/g3/<stamp>
+```
+
+`g3_compare.py` compares each mode with FIFO at the same N and repeat
+(`summary.csv`, `g3_compare.png`), drops cells whose CPU throttling exceeds 5%
+of the makespan, and scores how well each estimate ranks episodes by their
+true remaining time (`predict.csv`). Episode traces log `plan_work` once and a
+`remaining` record at every tool start, in every mode. `analysis/intent.py`
+now fits on other tasks (`--holdout task`, the default), not just other episodes.
+
 ## Layout
 
 ```
 rsched/proxy.py     tracing + scheduling proxy
 rsched/launch.py    `python -m rsched.launch <rpent args>`: rpent with tracing hooks
 rsched/sweep.py     concurrency sweeps, preflight, fail-fast, manifests
+rsched/intent.py    remaining work from a Flash plan; scheduling priorities
 rsched/nvml.py      GPU memory / utilization sampler
-analysis/           time breakdown and figures
+analysis/           time breakdown, intent prediction, G3 mode comparison
 configs/            one YAML per experiment
-scripts/            services, smoke test
+scripts/            services, smoke test, G3 driver
 env/                setup script, .env template
 tests/              CPU tests on RPent's real RPC classes with fake services
 docs/               RPent notes, troubleshooting

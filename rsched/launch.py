@@ -20,6 +20,11 @@ What gets patched (all inside this one ``rpent`` process):
     adds episode / tool-call headers to every RPC so the proxy can attribute
     model requests, and logs client-side latency for every RPC, including the
     simulator's ``env_server`` calls (simulator time).
+``robots.libero.flash.replay.load`` (Flash only)
+    reads the program the episode is about to replay and counts its remaining
+    model work down as it runs (``rsched.intent``). Every tool start logs a
+    ``remaining`` record; with ``RS_SCHED`` set, every model request carries the
+    estimate as ``X-RS-Priority`` for the proxy's ``priority`` policy.
 ``RunFinalizationContext``
     records the episode outcome, token usage, and elapsed time. LIBERO does not
     define ``finalize_run``, and the CLI builds this context only when that hook
@@ -42,9 +47,75 @@ from pathlib import Path
 from typing import Any
 
 from rsched import HDR_CALL, HDR_EPISODE, HDR_PRIORITY, HDR_TOOL
+from rsched import intent as intent_mod
 from rsched.traceio import JsonlWriter, now
 
 _tls = threading.local()
+
+
+class _Intent:
+    """Per-process scheduling state: the program's remaining work and the mode."""
+
+    def __init__(self) -> None:
+        self.mode = "none"
+        self.costs: dict[str, float] = {}
+        self.remaining: intent_mod.Remaining | None = None
+        self.history: intent_mod.HistoryEstimate | None = None
+        self.trace: JsonlWriter | None = None
+        self.episode = ""
+
+    def configure(self, trace: JsonlWriter, episode: str) -> None:
+        self.trace, self.episode = trace, episode
+        self.mode = os.environ.get("RS_SCHED", "none") or "none"
+        if self.mode not in intent_mod.MODES:
+            raise ValueError(f"RS_SCHED={self.mode!r}; choose from {intent_mod.MODES}")
+        self.costs = json.loads(os.environ.get("RS_COSTS") or "{}")
+        self.history = intent_mod.HistoryEstimate(os.environ.get("RS_HISTORY_FILE"))
+
+    def set_program(self, program: dict, plan_name: str = "") -> None:
+        work = intent_mod.plan_work(program)
+        self.remaining = intent_mod.Remaining(work, self.costs)
+        if self.trace is not None:
+            self.trace.write({"type": "plan_work", "episode": self.episode, "t": now(),
+                              "plan": plan_name, "mode": self.mode, **work.to_dict(),
+                              **self.remaining.snapshot()})
+
+    def log_remaining(self, call_id: str, tool: str) -> None:
+        if self.remaining is None or self.trace is None:
+            return
+        snap = self.remaining.snapshot()
+        hist = self.history.remaining_s(snap["done_s"]) if self.history else None
+        self.trace.write({"type": "remaining", "episode": self.episode, "t": now(),
+                          "call_id": call_id, "tool": tool, **snap, "history_s": hist})
+
+    def priority(self) -> float | None:
+        return intent_mod.priority(self.mode, self.remaining, self.history)
+
+    def finish(self) -> None:
+        if self.remaining is not None and self.history is not None:
+            self.history.record(self.episode, self.remaining.done_s())
+
+
+INTENT = _Intent()
+
+
+def set_program(program: dict, plan_name: str = "") -> None:
+    """Start counting a program's remaining work (also the hook for tests and fakes)."""
+    INTENT.set_program(program, plan_name)
+
+
+def _hook_flash_load() -> None:
+    """Wrap ``replay.load`` so the program is seen before its first model call."""
+    from robots.libero.flash import replay
+
+    orig_load = replay.load
+
+    def load(root, plan_name):
+        program = orig_load(root, plan_name)
+        set_program(program, str(plan_name))
+        return program
+
+    replay.load = load
 _RESULT_KEYS = ("name", "success", "chunks_used", "max_chunks", "executed_steps", "task_success")
 
 
@@ -88,9 +159,12 @@ def check_compat() -> None:
         )
 
 
-def install(trace: JsonlWriter, episode: str) -> None:
+def install(trace: JsonlWriter, episode: str, flash: bool = False) -> None:
     """Install all hooks. Safe to call once per process."""
     check_compat()
+    INTENT.configure(trace, episode)
+    if flash:
+        _hook_flash_load()
     import urllib.error
     import urllib.request
 
@@ -121,6 +195,9 @@ def install(trace: JsonlWriter, episode: str) -> None:
         prev = getattr(_tls, "call", None)
         _tls.call = (call_id, name)
         _tls.raw_result = None
+        if INTENT.remaining is not None:
+            INTENT.remaining.tool_start(name, input_dict if isinstance(input_dict, dict) else None)
+            INTENT.log_remaining(call_id, name)
         t_start = now()
         error = None
         result = None
@@ -132,6 +209,8 @@ def install(trace: JsonlWriter, episode: str) -> None:
             raise
         finally:
             t_end = now()
+            if INTENT.remaining is not None:
+                INTENT.remaining.tool_end(name)
             raw = getattr(_tls, "raw_result", None) or {}
             final = result.to_dict() if result is not None else {}
             if error is None:
@@ -171,9 +250,9 @@ def install(trace: JsonlWriter, episode: str) -> None:
         headers = {"Content-Type": "application/json", HDR_EPISODE: episode}
         if call is not None:
             headers[HDR_CALL], headers[HDR_TOOL] = call
-        priority = getattr(_tls, "priority", None)  # set by a future predictor
+        priority = INTENT.priority() if method in intent_mod.MODEL_METHODS else None
         if priority is not None:
-            headers[HDR_PRIORITY] = str(priority)
+            headers[HDR_PRIORITY] = repr(float(priority))
 
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         t0 = now()
@@ -201,9 +280,12 @@ def install(trace: JsonlWriter, episode: str) -> None:
                     "t_end": t1,
                     "dur_s": t1 - t0,
                     "req_bytes": len(body),
+                    "priority": priority,
                     "error": transport_error,
                 }
             )
+            if transport_error is None and INTENT.remaining is not None:
+                INTENT.remaining.rpc_done(method)
         try:
             response = http_rpc._from_json(json.loads(raw))
         except json.JSONDecodeError as exc:
@@ -261,6 +343,13 @@ def _patch_finalization(trace: JsonlWriter, episode: str) -> None:
     cli.get_robot_spec = get_robot_spec
 
 
+def _planner(argv: list[str]) -> str | None:
+    try:
+        return argv[argv.index("--planner") + 1]
+    except (ValueError, IndexError):
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     episode = os.environ.get("RS_EPISODE_ID") or f"ep-{uuid.uuid4().hex[:8]}"
@@ -269,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     t0 = now()
     trace.write({"type": "episode_start", "episode": episode, "t": t0, "pid": os.getpid(), "argv": argv})
 
-    install(trace, episode)
+    install(trace, episode, flash=_planner(argv) == "flash")
     _patch_finalization(trace, episode)
 
     import rpent.cli.main as cli
@@ -284,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         raise
     finally:
         t1 = now()
+        INTENT.finish()
         trace.write(
             {"type": "episode_end", "episode": episode, "t": t1, "elapsed_s": t1 - t0, "exit_code": code}
         )
