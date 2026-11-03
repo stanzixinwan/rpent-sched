@@ -128,6 +128,11 @@ def summarize(runs: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values(["level", "order"]).drop(columns="order")
 
 
+def spearman(a: pd.Series, b: pd.Series) -> float:
+    """Rank correlation without scipy (pandas' method="spearman" imports it)."""
+    return float(a.rank().corr(b.rank()))
+
+
 def prediction_quality(cell_list: list[tuple[str, Path]]) -> pd.DataFrame:
     """Rank agreement of remaining-work estimates with true remaining episode time."""
     rows = []
@@ -154,7 +159,7 @@ def prediction_quality(cell_list: list[tuple[str, Path]]) -> pd.DataFrame:
         row = {"mode": mode, "level": manifest["level"], "repeat": manifest["repeat"], "n_points": len(df)}
         for est in ("intent_s", "history_s"):
             part = df.dropna(subset=[est])
-            row[f"spearman_{est}"] = part["true_s"].corr(part[est], method="spearman") if len(part) > 2 else np.nan
+            row[f"spearman_{est}"] = spearman(part["true_s"], part[est]) if len(part) > 2 else np.nan
             row[f"coverage_{est}"] = len(part) / len(df)
         row["vla_plan_minus_actual_mean"] = (pa["plan_chunks"] - pa["vla"]).mean()
         row["vla_plan_mae"] = (pa["plan_chunks"] - pa["vla"]).abs().mean()
