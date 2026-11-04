@@ -11,6 +11,7 @@ so every policy sees exactly the same work, and N can go past what the CPU allow
     # 2. anywhere
     python analysis/g3_sim.py validate results/g3/<stamp>/sim/library.json.gz
     python analysis/g3_sim.py run results/g3/<stamp>/sim/library.json.gz --levels 1 4 8 16 32 64
+    python analysis/g3_sim.py launch results/g3/<stamp>/sim/library.json.gz   # batch launch order
 
 Episode model. A recorded episode is a sequence of model requests (``vla.predict``,
 ``molmo.ground``) separated by *local* time: everything that is not waiting or
@@ -30,6 +31,13 @@ Policies, each applied at both queues (smallest key served first, ties FIFO):
     oracle_srpt     least true remaining time (sum of the rest of the episode's
                     local and service time): the best any predictor could do
     *_lrpt          the same estimates, most remaining first
+
+Launch order (``launch``): for a fixed batch, which episode enters a free slot.
+Static rules sort the batch by the plan's whole-episode estimate (``plan_s``,
+logged before the first tool runs); ``jit_lpt`` decides at each free slot and
+starts a long episode only once it would otherwise finish after the projected
+batch end. Metric: batch makespan against the same batch in random order with
+FIFO queues.
 
 Caveat: local time was recorded at the concurrency it ran at (default: N=8
 cells, CPU unthrottled), so the simulation assumes CPU and GPU interference do
@@ -232,8 +240,14 @@ def _key(policy: str, ep: Episode, i: int, hist_mean: float | None) -> float:
     return est if order == "srpt" else -est
 
 
-def simulate(episodes: list[Episode], n: int, policy: str) -> dict:
-    """Closed loop: keep ``n`` episodes in flight, launch the next when one ends."""
+def simulate(episodes: list[Episode], n: int, policy: str, pick=None) -> dict:
+    """Closed loop: keep ``n`` episodes in flight, launch the next when one ends.
+
+    ``pick(t, pending, state)`` optionally chooses which pending episode (a
+    position in ``pending``, a list of episode indices) enters a free slot;
+    ``state`` has ``episodes``, ``n``, ``running`` {index: start time}, and
+    ``finished`` [(index, wall_s)]. Without it, episodes enter in list order.
+    """
     if policy not in POLICIES:
         raise ValueError(f"unknown policy {policy!r}")
     events: list = []  # (time, seq, kind, payload)
@@ -254,9 +268,19 @@ def simulate(episodes: list[Episode], n: int, policy: str) -> dict:
     busy_time = [0.0] * len(SERVERS)
     finished_work: list[float] = []
 
+    running: dict[int, float] = {}
+    finished: list[tuple[int, float]] = []
+    state = {"episodes": episodes, "n": n, "running": running, "finished": finished}
+
     def launch(t):
-        e = pending.popleft()
+        if pick is None:
+            e = pending.popleft()
+        else:
+            k = pick(t, list(pending), state)
+            e = pending[k]
+            del pending[k]
         t_start[e] = t
+        running[e] = t
         push(t + episodes[e].local[0], "arrive", e)
 
     def dispatch(s, t):
@@ -280,6 +304,8 @@ def simulate(episodes: list[Episode], n: int, policy: str) -> dict:
             if i == len(ep.server):  # tail done: episode ends
                 t_end[e] = t
                 finished_work.append(ep.work_s)
+                running.pop(e, None)
+                finished.append((e, t - t_start[e]))
                 if pending:
                     launch(t)
                 continue
@@ -315,6 +341,39 @@ def simulate(episodes: list[Episode], n: int, policy: str) -> dict:
 # ---------------------------------------------------------------------------
 
 LAUNCH_RULES = ("given", "lpt", "spt", "front", "front_back", "oracle_lpt", "oracle_front_back")
+DYNAMIC_RULES = ("jit_lpt", "oracle_jit_lpt")
+
+
+def jit_lpt(oracle: bool = False, slack: float = 1.0):
+    """Just-in-time LPT: launch the longest pending episode only once it threatens the batch end.
+
+    At each free slot, project when the batch ends if the rest ran at the
+    current pace: now + (planned work of pending episodes + what running ones
+    still need) / n, with planned work scaled to wall time by the ratio seen on
+    finished episodes (1.5 before any finish). A pending episode threatens the
+    end if, started now, it would finish later than that minus ``slack`` typical
+    episodes. If one does, launch the longest; otherwise take the next in list
+    order. Long episodes thus start late enough not to crowd the queues at the
+    beginning, but early enough not to be the tail.
+    """
+    def est(e: Episode) -> float:
+        return e.work_time if oracle else e.plan_est
+
+    def pick(t: float, pending: list[int], state: dict) -> int:
+        eps, n = state["episodes"], state["n"]
+        fin = state["finished"]
+        planned = sum(est(eps[i]) for i, _ in fin)
+        scale = (sum(w for _, w in fin) / planned) if fin and planned > 0 else 1.5
+        typical = scale * float(np.median([est(eps[i]) for i in pending]))
+        need = sum(est(eps[i]) * scale for i in pending)
+        need += sum(max(est(eps[i]) * scale - (t - t0), 0.0) for i, t0 in state["running"].items())
+        end = t + need / n
+        longest = max(range(len(pending)), key=lambda k: est(eps[pending[k]]))
+        if t + est(eps[pending[longest]]) * scale >= end - slack * typical:
+            return longest
+        return 0
+
+    return pick
 
 
 def launch_order(work: list[Episode], rule: str, n: int) -> list[Episode]:
@@ -454,9 +513,14 @@ def cmd_launch(args) -> None:
                 work = sample_workload(lib, k, rng)
                 base = simulate(work, n, "fifo")
                 for rule in args.rules:
-                    ordered = launch_order(work, rule, n)
+                    dynamic = rule in DYNAMIC_RULES
+                    ordered = work if dynamic else launch_order(work, rule, n)
+                    pick = jit_lpt(oracle=rule.startswith("oracle_"), slack=args.slack) if dynamic else None
                     for queue in args.queues:
-                        r = simulate(ordered, n, queue) if (rule, queue) != ("given", "fifo") else base
+                        if (rule, queue) == ("given", "fifo"):
+                            r = base
+                        else:
+                            r = simulate(ordered, n, queue, pick=pick)
                         rows.append({"batch": k, "level": n, "workload": w, "rule": rule, "queue": queue,
                                      "makespan_s": r["makespan_s"], "wall_mean_s": r["wall_mean_s"],
                                      "makespan_pct": (r["makespan_s"] / base["makespan_s"] - 1) * 100,
@@ -584,7 +648,8 @@ def main(argv: list[str] | None = None) -> None:
     la.add_argument("library")
     la.add_argument("--batch", type=int, nargs="*", default=[16, 32, 64, 128])
     la.add_argument("--levels", type=int, nargs="*", default=[4, 8, 12, 16])
-    la.add_argument("--rules", nargs="*", default=list(LAUNCH_RULES))
+    la.add_argument("--rules", nargs="*", default=list(LAUNCH_RULES + DYNAMIC_RULES))
+    la.add_argument("--slack", type=float, default=1.0, help="jit_lpt: margin in typical episodes")
     la.add_argument("--queues", nargs="*", default=["fifo", "intent_lrpt"])
     la.add_argument("--source-levels", type=int, nargs="*", default=[8])
     la.add_argument("--workloads", type=int, default=40)

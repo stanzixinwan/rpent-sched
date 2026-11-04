@@ -55,3 +55,31 @@ def test_true_remaining_time_and_round_trip(tmp_path):
     save_library([e], tmp_path / "lib.json.gz")
     (back,) = load_library(tmp_path / "lib.json.gz")
     assert back.rest == e.rest and back.local == e.local
+
+
+def test_launch_orders():
+    from g3_sim import launch_order
+
+    eps = [ep(f"e{i}", [w, 0], [0], [0.1]) for i, w in enumerate([5, 1, 9, 3, 7, 2])]
+    for e, plan in zip(eps, [5, 1, 9, 3, 7, 2]):
+        e.plan_s = float(plan)
+    names = lambda xs: [e.key for e in xs]  # noqa: E731
+    assert names(launch_order(eps, "lpt", 2)) == ["e2", "e4", "e0", "e3", "e5", "e1"]
+    assert names(launch_order(eps, "spt", 2)) == ["e1", "e5", "e3", "e0", "e4", "e2"]
+    # two longest first, two shortest last (shortest at the very end), the rest as listed
+    assert names(launch_order(eps, "front_back", 2)) == ["e2", "e4", "e0", "e3", "e5", "e1"][:2] + ["e0", "e3"] + ["e5", "e1"]
+    assert names(launch_order(eps, "given", 2)) == names(eps)
+
+
+def test_jit_lpt_keeps_the_long_episode_off_the_tail():
+    from g3_sim import jit_lpt
+
+    # Twelve short episodes listed before one long one, two slots: listed order
+    # starts the long one last and it becomes the tail.
+    eps = [ep(f"s{i}", [10, 0], [0], [0.1]) for i in range(12)] + [ep("long", [60, 0], [0], [0.1])]
+    for e in eps:
+        e.plan_s = e.work_time
+    given = simulate(eps, 2, "fifo")["makespan_s"]
+    jit = simulate(eps, 2, "fifo", pick=jit_lpt())["makespan_s"]
+    assert jit < given
+    assert jit == pytest.approx((12 * 10.1 + 60.1) / 2, rel=0.15)  # close to perfectly balanced
