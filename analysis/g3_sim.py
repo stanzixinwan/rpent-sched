@@ -75,6 +75,7 @@ class Episode:
     done: list[float]              # done_s at request time
     work_s: float                  # total priced work (history estimate's unit)
     real: dict = field(default_factory=dict)  # wall_s, wait_s as recorded
+    plan_s: float | None = None    # the plan's whole-episode estimate, known before launch
     rest: list[float] = field(default_factory=list)  # true remaining time at each request
 
     def __post_init__(self) -> None:
@@ -85,6 +86,13 @@ class Episode:
                 tail += self.service[i] + self.local[i + 1]
                 rest[i] = tail
             self.rest = rest
+
+    @property
+    def plan_est(self) -> float:
+        """Planned work before launch (``plan_work.intent_s``; older libraries: first request's)."""
+        if self.plan_s is not None:
+            return self.plan_s
+        return self.intent[0] if self.intent else 0.0
 
     @property
     def work_time(self) -> float:
@@ -182,7 +190,7 @@ def extract_cell(mode: str, cell: Path) -> tuple[list[Episode], list[str]]:
             key=f"{mode}/{cell.name}/{ep}", task=f"{s.get('suite')}_t{s.get('task')}",
             seed=int(s.get("seed", 0)), level=int(manifest["level"]), mode=mode,
             local=local, server=server, service=service, intent=intent, done=done,
-            work_s=history.get(ep, done[-1] if done else 0.0),
+            work_s=history.get(ep, done[-1] if done else 0.0), plan_s=float(plan["intent_s"]),
             real={"wall_s": end["t"] - start["t"], "wait_s": wait_total,
                   "repeat": manifest["repeat"], "launch": ep},
         ))
@@ -303,6 +311,62 @@ def simulate(episodes: list[Episode], n: int, policy: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# launch order (which episode enters when a slot frees up)
+# ---------------------------------------------------------------------------
+
+LAUNCH_RULES = ("given", "lpt", "spt", "front", "front_back", "oracle_lpt", "oracle_front_back")
+
+
+def launch_order(work: list[Episode], rule: str, n: int) -> list[Episode]:
+    """Order a batch before it starts, from each episode's planned work.
+
+    given        the batch as listed (random in the experiments): the baseline
+    lpt          longest planned work first
+    spt          shortest planned work first
+    front        the ``n`` longest first (longest leading), the rest as listed
+    front_back   like ``front``, and the ``n`` shortest last (shortest at the very end)
+    oracle_*     the same with the true work (local + service time), for reference
+    """
+    if rule not in LAUNCH_RULES:
+        raise ValueError(f"unknown launch rule {rule!r}; choose from {LAUNCH_RULES}")
+    if rule == "given":
+        return list(work)
+    oracle = rule.startswith("oracle_")
+    base = rule.removeprefix("oracle_")
+    est = [e.work_time if oracle else e.plan_est for e in work]
+    by_len = sorted(range(len(work)), key=lambda i: est[i], reverse=True)
+    if base == "lpt":
+        return [work[i] for i in by_len]
+    if base == "spt":
+        return [work[i] for i in reversed(by_len)]
+    k = min(n, len(work))
+    front = by_len[:k]
+    taken = set(front)
+    back = [i for i in reversed(by_len) if i not in taken][:k] if base == "front_back" else []
+    taken |= set(back)
+    middle = [i for i in range(len(work)) if i not in taken]
+    return [work[i] for i in front + middle + list(reversed(back))]
+
+
+def sample_workload(lib: list[Episode], k: int, rng: np.random.Generator) -> list[Episode]:
+    """``k`` episodes in random order: every (task, seed) cell in turn, a different recording each time."""
+    by_cell: dict[tuple, list[Episode]] = {}
+    for e in lib:
+        by_cell.setdefault((e.task, e.seed), []).append(e)
+    cells = list(by_cell.values())
+    pools = [list(rng.permutation(len(c))) for c in cells]
+    out: list[Episode] = []
+    rnd = 0
+    while len(out) < k:
+        for ci in rng.permutation(len(cells)):
+            if len(out) == k:
+                break
+            out.append(cells[ci][pools[ci][rnd % len(cells[ci])]])
+        rnd += 1
+    return [out[i] for i in rng.permutation(len(out))]
+
+
+# ---------------------------------------------------------------------------
 # commands
 # ---------------------------------------------------------------------------
 
@@ -377,6 +441,74 @@ def cmd_run(args) -> None:
           f" -> {out}/sim_runs.csv, sim_summary.csv, sim_gain.png")
 
 
+def cmd_launch(args) -> None:
+    """Launch-order rules x queue policies, against (given order, FIFO) on the same batch."""
+    import pandas as pd
+
+    lib = [e for e in load_library(Path(args.library)) if e.level in args.source_levels]
+    rng = np.random.default_rng(args.seed)
+    rows = []
+    for k in args.batch:
+        for n in args.levels:
+            for w in range(args.workloads):
+                work = sample_workload(lib, k, rng)
+                base = simulate(work, n, "fifo")
+                for rule in args.rules:
+                    ordered = launch_order(work, rule, n)
+                    for queue in args.queues:
+                        r = simulate(ordered, n, queue) if (rule, queue) != ("given", "fifo") else base
+                        rows.append({"batch": k, "level": n, "workload": w, "rule": rule, "queue": queue,
+                                     "makespan_s": r["makespan_s"], "wall_mean_s": r["wall_mean_s"],
+                                     "makespan_pct": (r["makespan_s"] / base["makespan_s"] - 1) * 100,
+                                     "wall_mean_pct": (r["wall_mean_s"] / base["wall_mean_s"] - 1) * 100,
+                                     "base_makespan_s": base["makespan_s"]})
+    df = pd.DataFrame(rows)
+    out = Path(args.out) if args.out else Path(args.library).parent
+    out.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out / "launch_runs.csv", index=False)
+    g = df.groupby(["batch", "level", "rule", "queue"])
+    summary = g.agg(makespan_pct=("makespan_pct", "mean"), makespan_sd=("makespan_pct", "std"),
+                    wall_mean_pct=("wall_mean_pct", "mean"), base_makespan_s=("base_makespan_s", "mean"),
+                    n=("makespan_pct", "size")).reset_index()
+    summary["makespan_ci"] = 1.96 * summary["makespan_sd"] / np.sqrt(summary["n"])
+    summary.to_csv(out / "launch_summary.csv", index=False)
+    plot_launch(summary, out / "launch_gain.png")
+    piv = summary.pivot_table(index=["batch", "level"], columns=["rule", "queue"], values="makespan_pct")
+    with pd.option_context("display.width", 250, "display.float_format", "{:.1f}".format):
+        print("makespan change vs (given order, FIFO), %:")
+        print(piv.to_string())
+    print(f"\n{args.workloads} batches per cell from N={args.source_levels} recordings -> "
+          f"{out}/launch_runs.csv, launch_summary.csv, launch_gain.png")
+
+
+def plot_launch(summary, path: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    batches = sorted(summary["batch"].unique())
+    fig, axes = plt.subplots(1, len(batches), figsize=(3.6 * len(batches), 3.4), sharey=True, squeeze=False)
+    for ax, k in zip(axes[0], batches):
+        part = summary[summary["batch"] == k]
+        for (rule, queue), g in part.groupby(["rule", "queue"]):
+            if (rule, queue) == ("given", "fifo") or rule == "spt":
+                continue
+            g = g.sort_values("level")
+            ls = ":" if rule.startswith("oracle_") else ("-" if queue == "fifo" else "--")
+            ax.errorbar(g["level"], g["makespan_pct"], yerr=g["makespan_ci"], ls=ls, marker="o", ms=3,
+                        capsize=2, label=f"{rule} + {queue}")
+        ax.axhline(0, color="black", lw=0.8)
+        ax.set_title(f"batch of {k} episodes")
+        ax.set_xlabel("concurrent episodes (N)")
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0][0].set_ylabel("makespan vs random launch + FIFO (%)")
+    axes[0][-1].legend(fontsize=6, frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
 def summarize(df):
     import pandas as pd
 
@@ -448,8 +580,18 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--workloads", type=int, default=30)
     r.add_argument("--seed", type=int, default=0)
     r.add_argument("--out", default=None)
+    la = sub.add_parser("launch", help="launch-order rules for batch makespan")
+    la.add_argument("library")
+    la.add_argument("--batch", type=int, nargs="*", default=[16, 32, 64, 128])
+    la.add_argument("--levels", type=int, nargs="*", default=[4, 8, 12, 16])
+    la.add_argument("--rules", nargs="*", default=list(LAUNCH_RULES))
+    la.add_argument("--queues", nargs="*", default=["fifo", "intent_lrpt"])
+    la.add_argument("--source-levels", type=int, nargs="*", default=[8])
+    la.add_argument("--workloads", type=int, default=40)
+    la.add_argument("--seed", type=int, default=0)
+    la.add_argument("--out", default=None)
     args = ap.parse_args(argv)
-    {"extract": cmd_extract, "validate": cmd_validate, "run": cmd_run}[args.cmd](args)
+    {"extract": cmd_extract, "validate": cmd_validate, "run": cmd_run, "launch": cmd_launch}[args.cmd](args)
 
 
 if __name__ == "__main__":
