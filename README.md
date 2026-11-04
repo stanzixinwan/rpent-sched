@@ -107,6 +107,24 @@ true remaining time (`predict.csv`). Episode traces log `plan_work` once and a
 `remaining` record at every tool start, in every mode. `analysis/intent.py`
 now fits on other tasks (`--holdout task`, the default), not just other episodes.
 
+## Launch order (G4)
+
+For a fixed batch, `launch.rule` decides which episode enters a free slot,
+from each episode's planned work (the Flash plan priced with `rsched/intent.py`,
+known before launch): `given` (list order; `launch.shuffle` randomizes it per
+repeat), `lpt`, `spt`, `front`, `front_back`, or `jit_lpt`, which starts a long
+episode only once it would otherwise become the batch's tail. The rules live in
+`rsched/launch_order.py`, shared with the trace-driven simulator
+(`analysis/g3_sim.py launch`), which predicts about -14% makespan for 32
+episodes at N=8. Plans come from RPent's memory sync unless `launch.plans_dir`
+is set.
+
+```bash
+bash scripts/launch_services.sh
+bash scripts/run_launch.sh                   # warm-up, then given vs jit_lpt x 4 repeats; resumable
+python analysis/launch_compare.py results/launch/<stamp>
+```
+
 ## Layout
 
 ```
@@ -114,6 +132,7 @@ rsched/proxy.py     tracing + scheduling proxy
 rsched/launch.py    `python -m rsched.launch <rpent args>`: rpent with tracing hooks
 rsched/sweep.py     concurrency sweeps, preflight, fail-fast, manifests
 rsched/intent.py    remaining work from a Flash plan; scheduling priorities
+rsched/launch_order.py  launch-order rules (sweep and simulator)
 rsched/nvml.py      GPU memory / utilization sampler
 analysis/           time breakdown, intent prediction, G3 mode comparison
 configs/            one YAML per experiment

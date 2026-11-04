@@ -59,6 +59,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from rsched.launch_order import jit_pick, static_order  # noqa: E402
+
 SERVERS = ("vla", "molmo")
 POLICIES = ("fifo", "intent_srpt", "history_srpt", "oracle_srpt",
             "intent_lrpt", "history_lrpt", "oracle_lrpt")
@@ -345,66 +348,26 @@ DYNAMIC_RULES = ("jit_lpt", "oracle_jit_lpt")
 
 
 def jit_lpt(oracle: bool = False, slack: float = 1.0):
-    """Just-in-time LPT: launch the longest pending episode only once it threatens the batch end.
-
-    At each free slot, project when the batch ends if the rest ran at the
-    current pace: now + (planned work of pending episodes + what running ones
-    still need) / n, with planned work scaled to wall time by the ratio seen on
-    finished episodes (1.5 before any finish). A pending episode threatens the
-    end if, started now, it would finish later than that minus ``slack`` typical
-    episodes. If one does, launch the longest; otherwise take the next in list
-    order. Long episodes thus start late enough not to crowd the queues at the
-    beginning, but early enough not to be the tail.
-    """
+    """``simulate`` pick for just-in-time LPT (``rsched.launch_order.jit_pick``)."""
     def est(e: Episode) -> float:
         return e.work_time if oracle else e.plan_est
 
     def pick(t: float, pending: list[int], state: dict) -> int:
-        eps, n = state["episodes"], state["n"]
-        fin = state["finished"]
-        planned = sum(est(eps[i]) for i, _ in fin)
-        scale = (sum(w for _, w in fin) / planned) if fin and planned > 0 else 1.5
-        typical = scale * float(np.median([est(eps[i]) for i in pending]))
-        need = sum(est(eps[i]) * scale for i in pending)
-        need += sum(max(est(eps[i]) * scale - (t - t0), 0.0) for i, t0 in state["running"].items())
-        end = t + need / n
-        longest = max(range(len(pending)), key=lambda k: est(eps[pending[k]]))
-        if t + est(eps[pending[longest]]) * scale >= end - slack * typical:
-            return longest
-        return 0
+        eps = state["episodes"]
+        return jit_pick(t, [est(eps[i]) for i in pending],
+                        [(est(eps[i]), t0) for i, t0 in state["running"].items()],
+                        [(est(eps[i]), w) for i, w in state["finished"]], state["n"], slack)
 
     return pick
 
 
 def launch_order(work: list[Episode], rule: str, n: int) -> list[Episode]:
-    """Order a batch before it starts, from each episode's planned work.
-
-    given        the batch as listed (random in the experiments): the baseline
-    lpt          longest planned work first
-    spt          shortest planned work first
-    front        the ``n`` longest first (longest leading), the rest as listed
-    front_back   like ``front``, and the ``n`` shortest last (shortest at the very end)
-    oracle_*     the same with the true work (local + service time), for reference
-    """
+    """Static launch order (``rsched.launch_order.static_order``); ``oracle_*`` uses true work."""
     if rule not in LAUNCH_RULES:
         raise ValueError(f"unknown launch rule {rule!r}; choose from {LAUNCH_RULES}")
-    if rule == "given":
-        return list(work)
     oracle = rule.startswith("oracle_")
-    base = rule.removeprefix("oracle_")
     est = [e.work_time if oracle else e.plan_est for e in work]
-    by_len = sorted(range(len(work)), key=lambda i: est[i], reverse=True)
-    if base == "lpt":
-        return [work[i] for i in by_len]
-    if base == "spt":
-        return [work[i] for i in reversed(by_len)]
-    k = min(n, len(work))
-    front = by_len[:k]
-    taken = set(front)
-    back = [i for i in reversed(by_len) if i not in taken][:k] if base == "front_back" else []
-    taken |= set(back)
-    middle = [i for i in range(len(work)) if i not in taken]
-    return [work[i] for i in front + middle + list(reversed(back))]
+    return [work[i] for i in static_order(est, rule.removeprefix("oracle_"), n)]
 
 
 def sample_workload(lib: list[Episode], k: int, rng: np.random.Generator) -> list[Episode]:

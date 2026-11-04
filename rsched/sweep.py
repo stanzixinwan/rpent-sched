@@ -39,6 +39,11 @@ from typing import Any
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from rsched.launch_order import RULES as LAUNCH_RULES  # noqa: E402
+from rsched.launch_order import STATIC_RULES as STATIC_LAUNCH_RULES  # noqa: E402
+from rsched.launch_order import jit_pick, plan_estimate, static_order  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -242,6 +247,49 @@ def scheduling(cfg: dict) -> dict:
     return sched
 
 
+def launch_config(cfg: dict) -> dict:
+    """``launch: {rule, slack, shuffle, seed, plans_dir}`` with defaults.
+
+    ``shuffle`` puts the episode list in a random order per repeat (seed + repeat)
+    before the rule applies, so ``rule: given`` is a random-order baseline and
+    two rules at the same repeat start from the same order.
+    """
+    lc = {"rule": "given", "slack": 1.0, "shuffle": False, "seed": 0, "plans_dir": None,
+          **(cfg.get("launch") or {})}
+    if lc["rule"] not in LAUNCH_RULES:
+        raise ValueError(f"launch.rule {lc['rule']!r}; choose from {LAUNCH_RULES}")
+    return lc
+
+
+def flash_plans_dir(cfg: dict) -> Path:
+    """Directory with ``<suite>_t<task>_plan.json``: config, or RPent's own memory sync.
+
+    ``python -m robots.libero.memory sync`` downloads the corpus into the cache
+    every episode reads (a no-op when it is already there) and prints its root.
+    """
+    explicit = (cfg.get("launch") or {}).get("plans_dir")
+    if explicit:
+        return Path(explicit)
+    extra = [str(x) for x in cfg["rpent"].get("extra_args", [])]
+    version = extra[extra.index("--memory-version") + 1] if "--memory-version" in extra else "GPT_5.5_xhigh"
+    proc = subprocess.run([sys.executable, "-m", "robots.libero.memory", "sync", "--memory-version", version,
+                           "--planner", "flash"], capture_output=True, text=True, cwd=REPO_ROOT)
+    if proc.returncode != 0:
+        raise RuntimeError(f"memory sync failed:\n{proc.stdout[-2000:]}{proc.stderr[-2000:]}")
+    root = Path(proc.stdout.strip().splitlines()[-1])
+    for name in ("flash", "task_card"):
+        if (root / name).is_dir():
+            return root / name
+    raise FileNotFoundError(f"no Flash plans under {root}")
+
+
+def plan_estimates(cfg: dict, pool: list[tuple[str, int, int]]) -> dict[tuple[str, int], float]:
+    """Planned work (s) per (suite, task) in the pool, priced like ``scheduling.costs``."""
+    plans = flash_plans_dir(cfg)
+    costs = (cfg.get("scheduling") or {}).get("costs") or {}
+    return {(su, t): plan_estimate(plans, su, t, costs) for su, t, _ in pool}
+
+
 # ---------------------------------------------------------------------------
 # one level
 # ---------------------------------------------------------------------------
@@ -285,8 +333,10 @@ def print_log_tail(path: Path, n: int = 25) -> None:
 
 
 class Level:
-    def __init__(self, cfg: dict, level: int, rep: int, out: Path, dry_run: bool) -> None:
+    def __init__(self, cfg: dict, level: int, rep: int, out: Path, dry_run: bool,
+                 estimates: dict[tuple[str, int], float] | None = None) -> None:
         self.cfg, self.level, self.rep, self.out, self.dry_run = cfg, level, rep, out, dry_run
+        self.estimates = estimates or {}
         # Abort after this many consecutive episodes that exit without a single tool call.
         self.fail_fast = 0 if dry_run else int(cfg.get("fail_fast", 2))
         self.consecutive_failures = 0
@@ -364,13 +414,30 @@ class Level:
         arrival = self.cfg.get("arrival", {"mode": "closed"})
         rng = random.Random(arrival.get("seed", 0))
 
-        specs = [
-            EpisodeSpec(f"N{self.level}r{self.rep}e{i:03d}", *pool[i % len(pool)])
-            for i in range(n_total)
-        ]
+        lc = launch_config(self.cfg)
+        cells = [pool[i % len(pool)] for i in range(n_total)]
+        if lc["shuffle"]:
+            random.Random(int(lc["seed"]) * 1000 + self.rep).shuffle(cells)
+        specs = [EpisodeSpec(f"N{self.level}r{self.rep}e{i:03d}", *c) for i, c in enumerate(cells)]
+        est = {s.episode_id: self.estimates.get((s.suite, s.task), 0.0 if self.dry_run else None)
+               for s in specs}
+        if lc["rule"] != "given" and any(v is None for v in est.values()):
+            raise ValueError(f"launch.rule={lc['rule']} needs a plan estimate for every episode")
+        if lc["rule"] in STATIC_LAUNCH_RULES:
+            specs = [specs[i] for i in static_order([est[s.episode_id] or 0.0 for s in specs],
+                                                     lc["rule"], self.level)]
         pending = list(specs)
         running: dict[str, tuple[subprocess.Popen, float]] = {}
         finished: list[dict] = []
+        launched: list[dict] = []
+
+        def next_spec(now_t: float) -> EpisodeSpec:
+            if lc["rule"] != "jit_lpt":
+                return pending.pop(0)
+            k = jit_pick(now_t, [est[s.episode_id] for s in pending],
+                         [(est[e], ts) for e, (_, ts) in running.items()],
+                         [(est[f["episode"]], f["wall_s"]) for f in finished], self.level, lc["slack"])
+            return pending.pop(k)
         next_arrival = time.time()
         t0 = time.time()
 
@@ -384,6 +451,7 @@ class Level:
                         "RS_HISTORY_FILE": str(self.out / "history.jsonl")})
             p = self._spawn(f"episode_{spec.episode_id}", self.episode_cmd(spec, endpoints), env)
             running[spec.episode_id] = (p, time.time())
+            launched.append({"episode": spec.episode_id, "t": time.time(), "estimate_s": est[spec.episode_id]})
             print(f"  start {spec.episode_id} {spec.suite} task={spec.task} seed={spec.seed} "
                   f"(running={len(running)})", flush=True)
 
@@ -392,10 +460,10 @@ class Level:
                 now_t = time.time()
                 if arrival["mode"] == "closed":
                     while pending and len(running) < self.level:
-                        launch(pending.pop(0))
+                        launch(next_spec(now_t))
                 else:  # poisson: rate in episodes/minute, capped at `level` in flight
                     while pending and now_t >= next_arrival and len(running) < self.level:
-                        launch(pending.pop(0))
+                        launch(next_spec(now_t))
                         next_arrival += rng.expovariate(arrival["rate_per_min"] / 60.0)
                 for eid, (p, ts) in list(running.items()):
                     rc = p.poll()
@@ -440,7 +508,8 @@ class Level:
                 os.killpg(p.pid, signal.SIGTERM)
             self.stop_infra()
         return {"t_start": t0, "t_end": time.time(), "episodes": finished,
-                "specs": [s.__dict__ for s in specs], "endpoints": endpoints, "aborted": aborted}
+                "specs": [s.__dict__ for s in specs], "endpoints": endpoints, "aborted": aborted,
+                "launch": lc, "launched": launched}
 
     def stop_infra(self) -> None:
         for p in self.procs:
@@ -461,6 +530,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--repeat-index", type=int, default=0,
                     help="number the first repeat k (directories N<level>_r<k>); for drivers")
     ap.add_argument("--sched", choices=SCHED_MODES, help="override scheduling.mode")
+    ap.add_argument("--launch", choices=LAUNCH_RULES, help="override launch.rule")
+    ap.add_argument("--episodes", type=int, help="override episodes_per_level (e.g. a short warm-up)")
     ap.add_argument("--out", default=None, help="output root (default results/<name>/<stamp>)")
     ap.add_argument("--dry-run", action="store_true", help="print commands, run nothing")
     ap.add_argument("--skip-preflight", action="store_true", help="skip the planner credential check")
@@ -474,6 +545,16 @@ def main(argv: list[str] | None = None) -> None:
     if args.sched:
         cfg["scheduling"] = {**(cfg.get("scheduling") or {}), "mode": args.sched}
     sched = scheduling(cfg)
+    if args.launch:
+        cfg["launch"] = {**(cfg.get("launch") or {}), "rule": args.launch}
+    if args.episodes:
+        cfg["episodes_per_level"] = args.episodes
+    lc = launch_config(cfg)
+    estimates = {}
+    if cfg.get("launch") and not args.dry_run:
+        estimates = plan_estimates(cfg, episode_pool(cfg))
+        print(f"launch: rule={lc['rule']} shuffle={lc['shuffle']}; planned work for "
+              f"{len(estimates)} tasks, {min(estimates.values()):.0f}-{max(estimates.values()):.0f} s")
     if not (args.dry_run or args.skip_preflight):
         preflight_planner(cfg)
     levels = args.levels or cfg["concurrency"]
@@ -497,7 +578,7 @@ def main(argv: list[str] | None = None) -> None:
                 "episode_env": cfg.get("episode_env") or {}, "scheduling": sched,
                 "cpu_start": cpu_info(),
             }
-            manifest.update(Level(cfg, level, rep, out, args.dry_run).run())
+            manifest.update(Level(cfg, level, rep, out, args.dry_run, estimates).run())
             manifest["cpu_end"] = cpu_info()
             (out / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
             if manifest["aborted"]:

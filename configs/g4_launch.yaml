@@ -1,0 +1,94 @@
+# G4: launch order by planned work, on the GPU (project doc claude/G3结果.md, section 3).
+#
+#   bash scripts/launch_services.sh
+#   bash scripts/run_launch.sh            # warm-up, then given vs jit_lpt x repeats; resumable
+#   python analysis/launch_compare.py results/launch/<stamp>
+#
+# One cell = the 32 G3 episodes at N=8 (CPU unthrottled on a 13.6-CPU pod),
+# shuffled per repeat (same order for both rules at a repeat). `given` launches
+# in that order; `jit_lpt` starts a long episode only when it would otherwise
+# become the batch's tail (rsched/launch_order.py, the same code the simulator
+# ran). The trace-driven simulator predicts about -14% makespan.
+# Queues: priority proxies with no priorities sent = FIFO, as in G3.
+name: g4_launch
+
+rpent:
+  robot: libero
+  libero_type: pro
+  planner: flash
+  cuda_device: 0
+  extra_args: ["--memory-version", "GPT_5.5_xhigh"]
+
+services:
+  vla:
+    backend: http://127.0.0.1:9000
+    policy: priority
+    max_inflight: 1
+  sam3:
+    backend: http://127.0.0.1:9001
+    policy: passthrough
+  molmo:
+    backend: http://127.0.0.1:9002
+    policy: priority
+    max_inflight: 1
+
+scheduling:
+  mode: none
+
+launch:
+  rule: given          # overridden per run: python -m rsched.sweep ... --launch jit_lpt
+  shuffle: true        # a fresh random order per repeat, shared by both rules
+  seed: 0
+  slack: 1.0
+  # plans_dir: ...     # default: RPent's memory sync (the cache episodes read)
+
+episode_env:
+  OMP_NUM_THREADS: 1
+  MKL_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
+  NUMEXPR_NUM_THREADS: 1
+
+episodes:
+  # 4 per swap suite, chosen for spread in pi0 calls, chunk budget, and Molmo
+  # anchors (project doc claude/G3计划.md). Suites interleaved; seeds 0 then 1.
+  list:
+    - {suite: libero_10_swap,       task: 0, seed: 0}
+    - {suite: libero_goal_swap,     task: 1, seed: 0}
+    - {suite: libero_object_swap,   task: 0, seed: 0}
+    - {suite: libero_spatial_swap,  task: 0, seed: 0}
+    - {suite: libero_10_swap,       task: 3, seed: 0}
+    - {suite: libero_goal_swap,     task: 3, seed: 0}
+    - {suite: libero_object_swap,   task: 2, seed: 0}
+    - {suite: libero_spatial_swap,  task: 1, seed: 0}
+    - {suite: libero_10_swap,       task: 4, seed: 0}
+    - {suite: libero_goal_swap,     task: 5, seed: 0}
+    - {suite: libero_object_swap,   task: 4, seed: 0}
+    - {suite: libero_spatial_swap,  task: 3, seed: 0}
+    - {suite: libero_10_swap,       task: 8, seed: 0}
+    - {suite: libero_goal_swap,     task: 7, seed: 0}
+    - {suite: libero_object_swap,   task: 9, seed: 0}
+    - {suite: libero_spatial_swap,  task: 7, seed: 0}
+    - {suite: libero_10_swap,       task: 0, seed: 1}
+    - {suite: libero_goal_swap,     task: 1, seed: 1}
+    - {suite: libero_object_swap,   task: 0, seed: 1}
+    - {suite: libero_spatial_swap,  task: 0, seed: 1}
+    - {suite: libero_10_swap,       task: 3, seed: 1}
+    - {suite: libero_goal_swap,     task: 3, seed: 1}
+    - {suite: libero_object_swap,   task: 2, seed: 1}
+    - {suite: libero_spatial_swap,  task: 1, seed: 1}
+    - {suite: libero_10_swap,       task: 4, seed: 1}
+    - {suite: libero_goal_swap,     task: 5, seed: 1}
+    - {suite: libero_object_swap,   task: 4, seed: 1}
+    - {suite: libero_spatial_swap,  task: 3, seed: 1}
+    - {suite: libero_10_swap,       task: 8, seed: 1}
+    - {suite: libero_goal_swap,     task: 7, seed: 1}
+    - {suite: libero_object_swap,   task: 9, seed: 1}
+    - {suite: libero_spatial_swap,  task: 7, seed: 1}
+
+concurrency: [8]
+episodes_per_level: 32
+repeats: 1
+episode_timeout_s: 3600
+arrival: {mode: closed}
+gpu_sampler: true
+gpu_interval_s: 0.5
