@@ -125,6 +125,28 @@ bash scripts/run_launch.sh                   # warm-up, then given vs jit_lpt x 
 python analysis/launch_compare.py results/launch/<stamp>
 ```
 
+## Held-out tasks and history baselines (G5)
+
+`launch.estimate` chooses what the launch rule orders by: `plan` (default),
+`history` (a table "task -> measured wall time" from an earlier run,
+`launch.history_file`), or `hybrid` (history where it exists, the plan
+elsewhere); `launch.cold_fraction` treats a fixed share of the tasks as never
+run. `scripts/run_g5.sh` records every Flash task once, builds the history
+table (`python -m rsched.history_table`), then compares random launch with
+JIT-LPT by plan, by history, and by history with half the tasks cold, on 16
+tasks never used to build or tune anything (`configs/g5_heldout.yaml`).
+
+```bash
+bash scripts/launch_services.sh
+bash scripts/run_g5.sh                       # ~20 min record + 4 arms x 5 repeats; resumable
+python analysis/launch_compare.py results/g5/<stamp> --baseline given
+```
+
+Out-of-sample checks in the simulator (no GPU): `analysis/holdout.py` tests the
+default cost table and JIT knob on tasks that did not shape them, and on random
+task splits with refitting; `analysis/history_baseline.py` compares the plan
+with per-task history, including cold start.
+
 ## Layout
 
 ```
@@ -132,7 +154,8 @@ rsched/proxy.py     tracing + scheduling proxy
 rsched/launch.py    `python -m rsched.launch <rpent args>`: rpent with tracing hooks
 rsched/sweep.py     concurrency sweeps, preflight, fail-fast, manifests
 rsched/intent.py    remaining work from a Flash plan; scheduling priorities
-rsched/launch_order.py  launch-order rules (sweep and simulator)
+rsched/launch_order.py  launch-order rules and estimates (sweep and simulator)
+rsched/history_table.py per-task history table from earlier sweep levels
 rsched/nvml.py      GPU memory / utilization sampler
 analysis/           time breakdown, intent prediction, G3 mode comparison
 configs/            one YAML per experiment

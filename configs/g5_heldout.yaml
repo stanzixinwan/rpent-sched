@@ -1,0 +1,107 @@
+# G5 step 2: JIT-LPT on tasks never used to build or tune anything.
+#
+# 16 tasks drawn at random (2 per suite, random.Random(2027)) from the 62
+# Flash tasks outside G3, so neither the cost table (G2) nor JIT's knob (G3,
+# simulator) saw them; 4 of the 8 suites (*_task) were never run at all.
+# Seeds 1 and 2: the history table comes from g5_record (seed 0), as a rerun
+# with new seeds would have it. 32 episodes, N=8, FIFO queues, shuffled per
+# repeat (same order for every arm at a repeat).
+#
+# Arms (scripts/run_g5.sh): given | jit_lpt with launch.estimate = plan,
+# history, or history with half the tasks treated as never run (cold 0.5).
+name: g5_heldout
+
+rpent:
+  robot: libero
+  libero_type: pro
+  planner: flash
+  cuda_device: 0
+  extra_args: ["--memory-version", "GPT_5.5_xhigh"]
+
+services:
+  vla:
+    backend: http://127.0.0.1:9000
+    policy: priority
+    max_inflight: 1
+  sam3:
+    backend: http://127.0.0.1:9001
+    policy: passthrough
+  molmo:
+    backend: http://127.0.0.1:9002
+    policy: priority
+    max_inflight: 1
+
+services:
+  vla:
+    backend: http://127.0.0.1:9000
+    policy: priority
+    max_inflight: 1
+  sam3:
+    backend: http://127.0.0.1:9001
+    policy: passthrough
+  molmo:
+    backend: http://127.0.0.1:9002
+    policy: priority
+    max_inflight: 1
+
+scheduling:
+  mode: none
+
+launch:
+  rule: given            # per arm: --launch, --estimate, --cold, --history-file
+  estimate: plan
+  history_file: null
+  cold_fraction: 0.0
+  cold_seed: 0
+  shuffle: true
+  seed: 0
+  slack: 1.0
+
+episode_env:
+  OMP_NUM_THREADS: 1
+  MKL_NUM_THREADS: 1
+  OPENBLAS_NUM_THREADS: 1
+  NUMEXPR_NUM_THREADS: 1
+
+episodes:
+  list:
+    - {suite: libero_10_swap,       task: 1, seed: 1}
+    - {suite: libero_goal_swap,     task: 2, seed: 1}
+    - {suite: libero_object_swap,   task: 5, seed: 1}
+    - {suite: libero_spatial_swap,  task: 4, seed: 1}
+    - {suite: libero_10_task,       task: 2, seed: 1}
+    - {suite: libero_goal_task,     task: 2, seed: 1}
+    - {suite: libero_object_task,   task: 4, seed: 1}
+    - {suite: libero_spatial_task,  task: 1, seed: 1}
+    - {suite: libero_10_swap,       task: 6, seed: 1}
+    - {suite: libero_goal_swap,     task: 9, seed: 1}
+    - {suite: libero_object_swap,   task: 8, seed: 1}
+    - {suite: libero_spatial_swap,  task: 6, seed: 1}
+    - {suite: libero_10_task,       task: 6, seed: 1}
+    - {suite: libero_goal_task,     task: 5, seed: 1}
+    - {suite: libero_object_task,   task: 9, seed: 1}
+    - {suite: libero_spatial_task,  task: 9, seed: 1}
+    - {suite: libero_10_swap,       task: 1, seed: 2}
+    - {suite: libero_goal_swap,     task: 2, seed: 2}
+    - {suite: libero_object_swap,   task: 5, seed: 2}
+    - {suite: libero_spatial_swap,  task: 4, seed: 2}
+    - {suite: libero_10_task,       task: 2, seed: 2}
+    - {suite: libero_goal_task,     task: 2, seed: 2}
+    - {suite: libero_object_task,   task: 4, seed: 2}
+    - {suite: libero_spatial_task,  task: 1, seed: 2}
+    - {suite: libero_10_swap,       task: 6, seed: 2}
+    - {suite: libero_goal_swap,     task: 9, seed: 2}
+    - {suite: libero_object_swap,   task: 8, seed: 2}
+    - {suite: libero_spatial_swap,  task: 6, seed: 2}
+    - {suite: libero_10_task,       task: 6, seed: 2}
+    - {suite: libero_goal_task,     task: 5, seed: 2}
+    - {suite: libero_object_task,   task: 9, seed: 2}
+    - {suite: libero_spatial_task,  task: 9, seed: 2}
+
+concurrency: [8]
+episodes_per_level: 32
+repeats: 1
+episode_timeout_s: 3600
+arrival: {mode: closed}
+gpu_sampler: true
+gpu_interval_s: 0.5
