@@ -37,6 +37,15 @@ bash scripts/launch_services.sh   # load Pi0.5, then SAM3 (minutes)
 bash scripts/smoke_test.sh --gpu  # one real episode end to end
 ```
 
+On a fresh cloud GPU pod (RunPod PyTorch template, A100 80GB, 250 GB disk),
+one script does all of it, including the Molmo venv and checkpoint for Flash
+sweeps, the MuJoCo EGL check, and the `env/.env` entries:
+
+```bash
+cd /workspace && git clone --recursive https://github.com/stanzixinwan/rpent-sched.git
+cd rpent-sched && bash env/setup_pod.sh          # add --launch to start the services too
+```
+
 Without a GPU: `bash env/setup.sh --no-gpu && uv pip install -e third_party/RPent`,
 then `bash scripts/smoke_test.sh`.
 
