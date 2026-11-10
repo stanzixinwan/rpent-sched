@@ -7,6 +7,7 @@ write lock (serialized), ``sam3.segment`` is read-only (concurrent).
     python tests/fakes/fake_services.py --kind vla  --port 9000 --ms 40
     python tests/fakes/fake_services.py --kind sam3 --port 9001 --ms 25
     python tests/fakes/fake_services.py --kind env  --port 9002 --ms 10
+    python tests/fakes/fake_services.py --kind molmo --port 9004 --ms 50
 """
 
 from __future__ import annotations
@@ -53,13 +54,25 @@ class FakeEnv(RpcFacade):
         return {"terminated": False}
 
 
+class FakeMolmo(RpcFacade):
+    def __init__(self, ms: float) -> None:
+        super().__init__()
+        self.ms = ms
+        self._rpc["molmo.ground"] = self.ground
+        self._readonly_methods.add("molmo.ground")
+
+    def ground(self, image_base64=None, query=None, **_):
+        time.sleep(self.ms / 1e3)
+        return {"point_xy": [10.0, 20.0], "answer": f"point at {query}", "image_size": [1024, 1024]}
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--kind", choices=["vla", "sam3", "env"], required=True)
+    p.add_argument("--kind", choices=["vla", "sam3", "env", "molmo"], required=True)
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--ms", type=float, default=30.0)
     args = p.parse_args()
-    facade = {"vla": FakeVLA, "sam3": FakeSAM3, "env": FakeEnv}[args.kind](args.ms)
+    facade = {"vla": FakeVLA, "sam3": FakeSAM3, "env": FakeEnv, "molmo": FakeMolmo}[args.kind](args.ms)
     facade.serve(transport="http", host="127.0.0.1", port=args.port)
 
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-for name in vla sam3 molmo; do
+for name in vla sam3 molmo llm; do
   pidfile="$SERVICE_DIR/$name.pid"
   if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
     kill "$(cat "$pidfile")" && log "stopped $name"

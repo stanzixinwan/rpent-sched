@@ -156,6 +156,25 @@ default cost table and JIT knob on tasks that did not shape them, and on random
 task splits with refitting; `analysis/history_baseline.py` compares the plan
 with per-task history, including cold start.
 
+## Plan B: a local planner on the same GPU
+
+Next direction (project doc `投稿评估.md`): serve the planner locally (a VLM via
+vLLM) on the GPU that runs Pi0.5 and Molmo, and use its tool calls as advance
+notice to move GPU time between the models. First, a feasibility test of how
+much they interfere:
+
+```bash
+bash env/setup_vllm.sh                    # .venv-vllm + Qwen2.5-VL-7B-Instruct (once)
+bash scripts/launch_services.sh && bash scripts/launch_llm.sh
+bash scripts/run_b_feasibility.sh         # ~20 min: robot models and planner, alone and together
+```
+
+`rsched/bench_interference.py` drives closed-loop synthetic load (VLA predicts
+with the chunk-step gap of a real pick, Molmo groundings, streamed planner
+completions with an image and a ~4k-token prompt) and reports, per scenario,
+latency percentiles, throughput, planner TTFT and time per output token, and
+each model's slowdown against running alone (`inflation.csv`).
+
 ## Layout
 
 ```
@@ -165,6 +184,7 @@ rsched/sweep.py     concurrency sweeps, preflight, fail-fast, manifests
 rsched/intent.py    remaining work from a Flash plan; scheduling priorities
 rsched/launch_order.py  launch-order rules and estimates (sweep and simulator)
 rsched/history_table.py per-task history table from earlier sweep levels
+rsched/bench_interference.py  plan B: planner / robot-model interference on one GPU
 rsched/nvml.py      GPU memory / utilization sampler
 analysis/           time breakdown, intent prediction, G3 mode comparison
 configs/            one YAML per experiment
