@@ -9,6 +9,8 @@
 # Pi0.5 + SAM3 + Molmo use ~36 GB of an 80 GB A100, so the default 0.32 (~26 GB)
 # fits. Settings (env/.env): LLM_MODEL, LLM_PORT (9003), LLM_GPU_UTIL (0.32),
 # LLM_MAX_LEN (16384), LLM_MAX_SEQS (32), VLLM_BIN. Log: results/services/llm.log.
+# Under MPS (scripts/mps.sh), LLM_MPS_PCT=30 caps the planner at 30% of the SMs
+# (CUDA_MPS_ACTIVE_THREAD_PERCENTAGE); unset = no cap.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
@@ -44,7 +46,9 @@ fi
 [[ -f "$LLM_MODEL/config.json" ]] || die "no model at $LLM_MODEL: bash env/setup_vllm.sh"
 
 log "starting llm ($(basename "$LLM_MODEL")) on :$LLM_PORT, gpu util $LLM_GPU_UTIL (log: results/services/llm.log)"
-nohup env CUDA_VISIBLE_DEVICES="$CUDA_DEVICE" OMP_NUM_THREADS="${SERVICE_THREADS:-4}" \
+mps_env=()
+[[ -n "${LLM_MPS_PCT:-}" ]] && mps_env=(CUDA_MPS_ACTIVE_THREAD_PERCENTAGE="$LLM_MPS_PCT")
+nohup env CUDA_VISIBLE_DEVICES="$CUDA_DEVICE" OMP_NUM_THREADS="${SERVICE_THREADS:-4}" "${mps_env[@]}" \
   "$VLLM_BIN" serve "$LLM_MODEL" --served-model-name "$LLM_SERVED_NAME" \
   --host 127.0.0.1 --port "$LLM_PORT" --gpu-memory-utilization "$LLM_GPU_UTIL" \
   --max-model-len "$LLM_MAX_LEN" --max-num-seqs "$LLM_MAX_SEQS" \

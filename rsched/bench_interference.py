@@ -151,13 +151,15 @@ class LlmWorker:
         self.prefix = shared_prefix
         self.image_b64 = _png_b64(synthetic_scene(512)) if image else None
 
-    def once(self) -> dict:
+    def once(self, output_tokens: int | None = None, on_token=None) -> dict:
+        """One streamed call; ``on_token(i)`` runs after the i-th streamed chunk (1-based)."""
+        n_out = output_tokens or self.output_tokens
         text = (f"{self.prefix}\n\nObservation {self.rng.random():.9f}: "
                 f"{filler(self.unique_words, self.rng)}\n\nNext tool call?")
         content = ([{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{self.image_b64}"}},
                     {"type": "text", "text": text}] if self.image_b64 else text)
-        body = {"model": self.model, "stream": True, "max_tokens": self.output_tokens,
-                "temperature": 0.0, "ignore_eos": True, "min_tokens": self.output_tokens,
+        body = {"model": self.model, "stream": True, "max_tokens": n_out,
+                "temperature": 0.0, "ignore_eos": True, "min_tokens": n_out,
                 "stream_options": {"include_usage": True},
                 "messages": [{"role": "user", "content": content}]}
         req = urllib.request.Request(self.url, data=json.dumps(body).encode(),
@@ -179,6 +181,8 @@ class LlmWorker:
                 for ch in msg.get("choices") or []:
                     if (ch.get("delta") or {}).get("content"):
                         token_times.append(now())
+                        if on_token is not None:
+                            on_token(len(token_times))
         t1 = now()
         gaps = np.diff(token_times) if len(token_times) > 1 else np.array([])
         return {"t_start": t0, "lat_s": t1 - t0,

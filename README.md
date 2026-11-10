@@ -175,6 +175,26 @@ completions with an image and a ~4k-token prompt) and reports, per scenario,
 latency percentiles, throughput, planner TTFT and time per output token, and
 each model's slowdown against running alone (`inflation.csv`).
 
+Result (A100, `results/b_feasibility/20261110-160531`): Pi0.5 is ~2.2x slower
+whenever the planner decodes, whether it serves 1 or 16 streams, and the
+planner's time per token goes up 1.3-2.5x: the processes take turns on the GPU.
+Stage 2a asks whether coordinating them helps and whether MPS already does:
+
+```bash
+bash scripts/run_b2a.sh                   # ~1.5-2 h; results/b2a/<stamp>/
+```
+
+`rsched/bench_phases.py` runs batches of synthetic agent episodes
+(planner call -> optional Molmo grounding -> a burst of Pi0.5 chunks, repeated)
+and a coordinator that freezes the planner server (SIGSTOP/SIGCONT on the vLLM
+process tree) while a burst runs, under different policies: never (`none`),
+always (`vla_first`), or only when a burst is about to end by its announced
+`max_chunks` (`intent`), by the mean burst length (`history`), or by its true
+length (`oracle`). Stage 2 restarts the services under MPS (`scripts/mps.sh`)
+and repeats the uncoordinated batches and the interference scenarios. If a run
+is killed while the planner is frozen: `python -m rsched.bench_phases --resume-llm`
+(`scripts/stop_services.sh` also thaws it).
+
 ## Layout
 
 ```
@@ -185,6 +205,7 @@ rsched/intent.py    remaining work from a Flash plan; scheduling priorities
 rsched/launch_order.py  launch-order rules and estimates (sweep and simulator)
 rsched/history_table.py per-task history table from earlier sweep levels
 rsched/bench_interference.py  plan B: planner / robot-model interference on one GPU
+rsched/bench_phases.py  plan B 2a: agent-like batches with planner/VLA coordination
 rsched/nvml.py      GPU memory / utilization sampler
 analysis/           time breakdown, intent prediction, G3 mode comparison
 configs/            one YAML per experiment
