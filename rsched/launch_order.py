@@ -14,6 +14,13 @@ tests exactly the rule that was simulated.
     jit_lpt     decided at each free slot: start the longest pending episode
                 only once it would otherwise finish after the projected batch
                 end; otherwise the next as listed (see ``jit_pick``)
+
+What the rules order by (``launch_estimates``):
+
+    plan        the Flash plan's estimate (known before any episode has run)
+    history     a table "task -> measured wall time" from an earlier run;
+                tasks missing from it (or marked cold) get the mean of the known
+    hybrid      history where it exists, the plan (in history's units) elsewhere
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from rsched.intent import Remaining, plan_work
 
 STATIC_RULES = ("given", "lpt", "spt", "front", "front_back")
 RULES = STATIC_RULES + ("jit_lpt",)
+ESTIMATES = ("plan", "history", "hybrid")
 
 
 def plan_name(suite: str, task: int) -> str:
@@ -91,3 +99,56 @@ def jit_pick(now: float, pending_est: list[float], running: list[tuple[float, fl
     if now + pending_est[longest] * scale >= end - slack * typical:
         return longest
     return 0
+
+
+def task_key(suite: str, task: int) -> str:
+    """``libero_10_swap``, 3 -> ``libero_10_swap_t3`` (history tables, simulator libraries)."""
+    return f"{suite}_t{task}"
+
+
+def load_history(path: Path) -> dict[str, float]:
+    """``{"libero_10_swap_t3": 123.4, ...}``: mean measured seconds per task."""
+    table = json.loads(Path(path).read_text())
+    return {str(k): float(v) for k, v in (table.get("tasks", table)).items()}
+
+
+def cold_tasks(keys: list[str], fraction: float, seed: int) -> set[str]:
+    """A reproducible ``fraction`` of the distinct task keys, treated as never run."""
+    import random
+
+    distinct = sorted(set(keys))
+    k = round(fraction * len(distinct))
+    return set(random.Random(seed).sample(distinct, k)) if k else set()
+
+
+def launch_estimates(plan: dict, history: dict[str, float] | None, mode: str,
+                     cold: set[str] | frozenset = frozenset(), weights: dict | None = None) -> dict:
+    """Per-task launch estimates for one mode, keyed like ``plan`` ((suite, task) tuples).
+
+    History and hybrid are rescaled so their weighted sum equals the plan's
+    (rank-preserving), so ``jit_pick``'s prior wall/plan ratio fits every mode
+    the same way; ``weights`` counts how often each task occurs in the batch.
+    This is the estimate the trace-driven simulator compared (history_baseline.py).
+    """
+    if mode not in ESTIMATES:
+        raise ValueError(f"launch.estimate {mode!r}; choose from {ESTIMATES}")
+    if mode == "plan":
+        return dict(plan)
+    if history is None:
+        raise ValueError(f"launch.estimate={mode} needs launch.history_file")
+    keys = {t: task_key(*t) for t in plan}
+    known = [t for t in plan if keys[t] in history and keys[t] not in cold]
+    w = weights or {t: 1 for t in plan}
+    if known:
+        fill = sum(history[keys[t]] for t in known) / len(known)
+        ratio = sum(history[keys[t]] for t in known) / max(sum(plan[t] for t in known), 1e-9)
+    else:
+        fill, ratio = 1.0, 1.0
+    if mode == "history":
+        est = {t: (history[keys[t]] if t in known else fill) for t in plan}
+    else:
+        est = {t: (history[keys[t]] if t in known else plan[t] * ratio) for t in plan}
+    total = sum(est[t] * w.get(t, 1) for t in plan)
+    target = sum(plan[t] * w.get(t, 1) for t in plan)
+    return {t: est[t] * target / total for t in plan} if total > 0 else dict(plan)
+

@@ -42,7 +42,16 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rsched.launch_order import RULES as LAUNCH_RULES  # noqa: E402
 from rsched.launch_order import STATIC_RULES as STATIC_LAUNCH_RULES  # noqa: E402
-from rsched.launch_order import jit_pick, plan_estimate, static_order  # noqa: E402
+from rsched.launch_order import ESTIMATES as LAUNCH_ESTIMATES  # noqa: E402
+from rsched.launch_order import (  # noqa: E402
+    cold_tasks,
+    jit_pick,
+    launch_estimates,
+    load_history,
+    plan_estimate,
+    static_order,
+    task_key,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -255,9 +264,16 @@ def launch_config(cfg: dict) -> dict:
     two rules at the same repeat start from the same order.
     """
     lc = {"rule": "given", "slack": 1.0, "shuffle": False, "seed": 0, "plans_dir": None,
+          "estimate": "plan", "history_file": None, "cold_fraction": 0.0, "cold_seed": 0,
           **(cfg.get("launch") or {})}
     if lc["rule"] not in LAUNCH_RULES:
         raise ValueError(f"launch.rule {lc['rule']!r}; choose from {LAUNCH_RULES}")
+    if lc["estimate"] not in LAUNCH_ESTIMATES:
+        raise ValueError(f"launch.estimate {lc['estimate']!r}; choose from {LAUNCH_ESTIMATES}")
+    if lc["estimate"] != "plan" and not lc["history_file"]:
+        raise ValueError(f"launch.estimate={lc['estimate']} needs launch.history_file")
+    if not 0.0 <= float(lc["cold_fraction"]) <= 1.0:
+        raise ValueError("launch.cold_fraction must be in [0, 1]")
     return lc
 
 
@@ -288,6 +304,29 @@ def plan_estimates(cfg: dict, pool: list[tuple[str, int, int]]) -> dict[tuple[st
     plans = flash_plans_dir(cfg)
     costs = (cfg.get("scheduling") or {}).get("costs") or {}
     return {(su, t): plan_estimate(plans, su, t, costs) for su, t, _ in pool}
+
+
+def episode_estimates(cfg: dict, pool: list[tuple[str, int, int]]) -> tuple[dict, dict]:
+    """Launch estimates per (suite, task) for ``launch.estimate``, plus what was used.
+
+    The plan is always computed (history and hybrid are rescaled to it); the
+    cold set is drawn once from the pool's tasks, the same for every repeat.
+    """
+    lc = launch_config(cfg)
+    n_total = int(cfg["episodes_per_level"])
+    cells = [pool[i % len(pool)] for i in range(n_total)]
+    weights: dict[tuple[str, int], int] = {}
+    for su, t, _ in cells:
+        weights[(su, t)] = weights.get((su, t), 0) + 1
+    plan = plan_estimates(cfg, pool)
+    history = load_history(Path(lc["history_file"])) if lc["history_file"] else None
+    cold = cold_tasks([task_key(su, t) for su, t in plan], float(lc["cold_fraction"]), int(lc["cold_seed"]))
+    est = launch_estimates(plan, history, lc["estimate"], cold, weights)
+    info = {"estimate": lc["estimate"], "cold_tasks": sorted(cold),
+            "history_tasks": sorted(set(history or {}) & {task_key(*t) for t in plan}),
+            "plan_s": {task_key(*t): v for t, v in plan.items()},
+            "estimate_s": {task_key(*t): v for t, v in est.items()}}
+    return est, info
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +461,7 @@ class Level:
         est = {s.episode_id: self.estimates.get((s.suite, s.task), 0.0 if self.dry_run else None)
                for s in specs}
         if lc["rule"] != "given" and any(v is None for v in est.values()):
-            raise ValueError(f"launch.rule={lc['rule']} needs a plan estimate for every episode")
+            raise ValueError(f"launch.rule={lc['rule']} needs a launch estimate for every episode")
         if lc["rule"] in STATIC_LAUNCH_RULES:
             specs = [specs[i] for i in static_order([est[s.episode_id] or 0.0 for s in specs],
                                                      lc["rule"], self.level)]
@@ -531,6 +570,9 @@ def main(argv: list[str] | None = None) -> None:
                     help="number the first repeat k (directories N<level>_r<k>); for drivers")
     ap.add_argument("--sched", choices=SCHED_MODES, help="override scheduling.mode")
     ap.add_argument("--launch", choices=LAUNCH_RULES, help="override launch.rule")
+    ap.add_argument("--estimate", choices=LAUNCH_ESTIMATES, help="override launch.estimate")
+    ap.add_argument("--cold", type=float, help="override launch.cold_fraction")
+    ap.add_argument("--history-file", help="override launch.history_file")
     ap.add_argument("--episodes", type=int, help="override episodes_per_level (e.g. a short warm-up)")
     ap.add_argument("--out", default=None, help="output root (default results/<name>/<stamp>)")
     ap.add_argument("--dry-run", action="store_true", help="print commands, run nothing")
@@ -547,14 +589,21 @@ def main(argv: list[str] | None = None) -> None:
     sched = scheduling(cfg)
     if args.launch:
         cfg["launch"] = {**(cfg.get("launch") or {}), "rule": args.launch}
+    if args.estimate:
+        cfg["launch"] = {**(cfg.get("launch") or {}), "estimate": args.estimate}
+    if args.cold is not None:
+        cfg["launch"] = {**(cfg.get("launch") or {}), "cold_fraction": args.cold}
+    if args.history_file:
+        cfg["launch"] = {**(cfg.get("launch") or {}), "history_file": args.history_file}
     if args.episodes:
         cfg["episodes_per_level"] = args.episodes
     lc = launch_config(cfg)
-    estimates = {}
+    estimates, est_info = {}, {}
     if cfg.get("launch") and not args.dry_run:
-        estimates = plan_estimates(cfg, episode_pool(cfg))
-        print(f"launch: rule={lc['rule']} shuffle={lc['shuffle']}; planned work for "
-              f"{len(estimates)} tasks, {min(estimates.values()):.0f}-{max(estimates.values()):.0f} s")
+        estimates, est_info = episode_estimates(cfg, episode_pool(cfg))
+        print(f"launch: rule={lc['rule']} estimate={lc['estimate']} shuffle={lc['shuffle']}; "
+              f"{len(estimates)} tasks, {min(estimates.values()):.0f}-{max(estimates.values()):.0f} s; "
+              f"history for {len(est_info['history_tasks'])}, cold {len(est_info['cold_tasks'])}")
     if not (args.dry_run or args.skip_preflight):
         preflight_planner(cfg)
     levels = args.levels or cfg["concurrency"]
@@ -576,7 +625,7 @@ def main(argv: list[str] | None = None) -> None:
                 "host": platform.node(), "platform": platform.platform(),
                 "python": sys.version.split()[0], "gpus": gpu_info(),
                 "episode_env": cfg.get("episode_env") or {}, "scheduling": sched,
-                "cpu_start": cpu_info(),
+                "launch_estimates": est_info, "cpu_start": cpu_info(),
             }
             manifest.update(Level(cfg, level, rep, out, args.dry_run, estimates).run())
             manifest["cpu_end"] = cpu_info()
