@@ -102,6 +102,10 @@ concurrency: [8]
 episodes_per_level: 32
 repeats: 1
 episode_timeout_s: 3600
+# libero_10_task t2 never starts (env_server exits at launch, every seed; 3 of 78
+# Flash tasks do this in LIBERO-PRO). Its 2 episodes crash in every cell and every
+# arm alike, so cells stay paired; allow them without aborting the sweep.
+fail_fast: 3
 arrival: {mode: closed}
 gpu_sampler: true
 gpu_interval_s: 0.5
