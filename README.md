@@ -195,6 +195,14 @@ and repeats the uncoordinated batches and the interference scenarios. If a run
 is killed while the planner is frozen: `python -m rsched.bench_phases --resume-llm`
 (`scripts/stop_services.sh` also thaws it).
 
+Result: MPS alone makes the batches 24-30% faster; on top of MPS no pausing
+policy helps. What is left is the VLA queue: the Pi0.5 server takes batched
+observations, but every agent sends one at a time. Next check (~25 min):
+
+```bash
+bash scripts/run_b_batch.sh               # Pi0.5 latency for batch 1..16, +/- planner load, +/- MPS
+```
+
 ## Layout
 
 ```
@@ -206,6 +214,7 @@ rsched/launch_order.py  launch-order rules and estimates (sweep and simulator)
 rsched/history_table.py per-task history table from earlier sweep levels
 rsched/bench_interference.py  plan B: planner / robot-model interference on one GPU
 rsched/bench_phases.py  plan B 2a: agent-like batches with planner/VLA coordination
+rsched/bench_batch.py   Pi0.5 latency vs batch size (go/no-go for cross-episode batching)
 rsched/nvml.py      GPU memory / utilization sampler
 analysis/           time breakdown, intent prediction, G3 mode comparison
 configs/            one YAML per experiment
