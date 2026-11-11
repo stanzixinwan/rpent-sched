@@ -17,3 +17,7 @@ results/*
 # private working notes (kept local, not published)
 .cursor/
 docs/STATUS.md
+
+# transfer archives and files set aside for deletion
+*.tgz
+_to_delete/

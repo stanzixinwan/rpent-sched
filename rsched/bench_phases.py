@@ -356,6 +356,13 @@ def summarize(out: Path) -> None:
     base = runs[runs["label"] == "none"].set_index(["level", "repeat"])["makespan_s"]
     runs["vs_none_pct"] = [(m / base.get((lv, rp), np.nan) - 1) * 100
                            for m, lv, rp in zip(runs["makespan_s"], runs["level"], runs["repeat"])]
+    # against no coordination on the same server setup (none@mps for the mps runs)
+    runs["tag"] = runs["tag"].fillna("")
+    same = {(t, lv, rp): m for t, lv, rp, m, lab in zip(runs["tag"], runs["level"], runs["repeat"],
+                                                      runs["makespan_s"], runs["label"])
+            if lab == ("none@" + t if t else "none")}
+    runs["vs_same_pct"] = [(m / same.get((t, lv, rp), np.nan) - 1) * 100
+                           for m, t, lv, rp in zip(runs["makespan_s"], runs["tag"], runs["level"], runs["repeat"])]
     runs["paused_frac"] = runs["paused_s"] / runs["makespan_s"]
 
     def ci(x):
@@ -369,6 +376,7 @@ def summarize(out: Path) -> None:
     g = runs.groupby(["level", "label"], sort=False)
     table = g.agg(n=("makespan_s", "size"), makespan_s=("makespan_s", "mean"),
                   vs_none_pct=("vs_none_pct", "mean"), vs_none_ci=("vs_none_pct", ci),
+                  vs_same_pct=("vs_same_pct", "mean"), vs_same_ci=("vs_same_pct", ci),
                   mean_episode_s=("mean_episode_s", "mean"), paused_frac=("paused_frac", "mean"),
                   vla_p50_s=("vla_p50_s", "mean"), plan_p50_s=("plan_p50_s", "mean"),
                   burst_mean_s=("burst_mean_s", "mean"), molmo_p50_s=("molmo_p50_s", "mean"),
@@ -377,7 +385,8 @@ def summarize(out: Path) -> None:
     runs.drop(columns=["errors"]).to_csv(out / "runs.csv", index=False)
     with pd.option_context("display.width", 220, "display.float_format", "{:.3f}".format):
         print(table.to_string(index=False))
-    print(f"\nvs_none_pct: batch makespan against the same batch with no coordination (negative is faster), "
+    print(f"\nvs_none_pct: batch makespan against the same batch with no coordination and no MPS; "
+          f"vs_same_pct: against no coordination on the same setup (none@<tag>); negative is faster, "
           f"mean and 95% t-CI over repeats\nwrote {out}/summary.csv, runs.csv")
 
 
