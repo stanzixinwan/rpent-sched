@@ -36,6 +36,18 @@ if ! command -v uv >/dev/null && [[ ! -x "$HOME/.local/bin/uv" ]]; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 uv --version
+# After a pod Stop/Start only /workspace survives: the venvs are there, but the
+# uv-managed Python they link to lived in ~/.local and is gone. Reinstalling the
+# same version puts it back at the same path.
+for v in .venv .venv-molmo .venv-vllm; do
+  if [[ -L $v/bin/python ]] && ! $v/bin/python -c "" 2>/dev/null; then
+    target=$(readlink -f "$v/bin/python" || readlink "$v/bin/python")
+    ver=$(grep -oE "cpython-3\.[0-9]+\.[0-9]+" <<<"$target" | head -1 | cut -d- -f2)
+    echo "$v: interpreter missing ($target); reinstalling Python ${ver:-3.11}"
+    uv python install "${ver:-3.11}"
+    $v/bin/python -c "" || die "$v still broken; delete it and rerun this script"
+  fi
+done
 
 step "2/7 shell settings (HF_HUB_ENABLE_HF_TRANSFER off in every new shell)"
 for line in "${BASHRC_LINES[@]}"; do
