@@ -21,3 +21,13 @@ docs/STATUS.md
 # transfer archives and files set aside for deletion
 *.tgz
 _to_delete/
+
+# LaTeX build outputs
+paper/*.pdf
+paper/*.aux
+paper/*.log
+paper/*.bbl
+paper/*.blg
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.out
