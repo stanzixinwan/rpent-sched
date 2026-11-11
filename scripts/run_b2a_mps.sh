@@ -47,4 +47,4 @@ fi
 
 "${PHASES[@]}" --summarize-only
 log "done: $OUT"
-log "copy back: tar czf /workspace/b2a.tgz -C $RS_ROOT results/b2a results/b_feasibility && runpodctl send /workspace/b2a.tgz"
+log "copy back: tar czf /workspace/b2a.tgz -C $RS_ROOT results/b2a && runpodctl send /workspace/b2a.tgz"
