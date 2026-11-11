@@ -17,3 +17,5 @@ HDR_EPISODE = "X-RS-Episode"
 HDR_CALL = "X-RS-Call"
 HDR_TOOL = "X-RS-Tool"
 HDR_PRIORITY = "X-RS-Priority"
+# chunks the current pi0_* tool call may still use (its max_chunks minus chunks done)
+HDR_BURST_LEFT = "X-RS-Burst-Left"

@@ -13,8 +13,8 @@ source "$(dirname "$0")/common.sh"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="$RS_ROOT/results/b_batch/$STAMP"
 mkdir -p "$OUT"
-bash scripts/launch_services.sh status
-bash scripts/launch_llm.sh status
+bash scripts/launch_services.sh            # no-op if healthy; the planner must be up too:
+bash scripts/launch_llm.sh                 # a down planner silently turned the "4 streams" rows into "0"
 nvidia-smi --query-gpu=name,memory.used,memory.total,driver_version --format=csv,noheader > "$OUT/gpu_info.txt" || true
 
 restart() {  # $1 = with MPS (1) or not (0)

@@ -203,6 +203,19 @@ observations, but every agent sends one at a time. Next check (~25 min):
 bash scripts/run_b_batch.sh               # Pi0.5 latency for batch 1..16, +/- planner load, +/- MPS
 ```
 
+A batch of 8 costs ~1.95x a batch of 1 (4x the throughput). The proxy can now
+merge concurrent `vla.predict` calls (`--policy batch`, `rsched/batching.py`):
+`greedy` sends everything waiting when Pi0.5 frees up; `window` holds the
+oldest call a few ms; `predict` holds it only while another episode inside a
+pick is expected to send its next chunk, and with `--batch-intent` uses the
+pick's `max_chunks` (header `X-RS-Burst-Left`, sent by `rsched.launch`) to stop
+waiting for episodes whose pick is over.
+
+```bash
+bash scripts/run_b3.sh                    # ~2 h: agent-like batches through each batching variant, MPS
+bash scripts/run_g6.sh                    # ~2-2.5 h: real Flash episodes (G5 held-out batch), N=8/16
+```
+
 ## Layout
 
 ```
@@ -215,6 +228,7 @@ rsched/history_table.py per-task history table from earlier sweep levels
 rsched/bench_interference.py  plan B: planner / robot-model interference on one GPU
 rsched/bench_phases.py  plan B 2a: agent-like batches with planner/VLA coordination
 rsched/bench_batch.py   Pi0.5 latency vs batch size (go/no-go for cross-episode batching)
+rsched/batching.py      cross-episode batching of vla.predict (proxy --policy batch)
 rsched/nvml.py      GPU memory / utilization sampler
 analysis/           time breakdown, intent prediction, G3 mode comparison
 configs/            one YAML per experiment

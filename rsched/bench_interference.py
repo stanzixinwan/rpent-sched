@@ -73,12 +73,36 @@ def _opener():
 # ---------------------------------------------------------------------------
 
 
+def header_rpc_client(endpoint: str):
+    """RPent's HttpRpcClient that also sends ``client.headers`` (episode id, burst state for the proxy)."""
+    from rpent.utils.rpc import http_rpc
+
+    class HeaderRpcClient(http_rpc.HttpRpcClient):
+        def __init__(self, base_url: str) -> None:
+            super().__init__(base_url)
+            self.headers: dict[str, str] = {}
+
+        def call(self, method, args=(), kwargs=None, *, timeout_s=None):
+            payload = {"method": method, "args": list(args), "kwargs": kwargs or {}, "session_id": self._session_id}
+            body = json.dumps(payload, cls=http_rpc._NumpyEncoder).encode("utf-8")
+            req = urllib.request.Request(f"{self._base_url}/call", data=body, method="POST",
+                                         headers={"Content-Type": "application/json", **self.headers})
+            try:
+                with _opener().open(req, timeout=timeout_s or 120) as resp:
+                    raw = resp.read()
+            except OSError as exc:
+                raise http_rpc.RpcError(method, f"HTTP request failed: {exc}") from exc
+            return http_rpc.check_response(http_rpc._from_json(json.loads(raw)), method)
+
+    return HeaderRpcClient(endpoint)
+
+
 class VlaWorker:
     def __init__(self, endpoint: str, gap_s: float, seed: int) -> None:
         from rpent.robots.components.pi05_vla_client import Pi05VLAClient
-        from rpent.utils.rpc.http_rpc import HttpRpcClient
 
-        self.client = Pi05VLAClient(HttpRpcClient(endpoint), embodiment="libero")
+        self.rpc = header_rpc_client(endpoint)
+        self.client = Pi05VLAClient(self.rpc, embodiment="libero")
         self.gap_s = gap_s
         rng = np.random.default_rng(seed)
         self.obs = {
@@ -87,6 +111,9 @@ class VlaWorker:
             "states": rng.normal(size=8).astype(np.float32),
             "task_descriptions": "pick up the black bowl and place it on the plate",
         }
+
+    def set_headers(self, headers: dict[str, str]) -> None:
+        self.rpc.headers = dict(headers)
 
     def once(self) -> dict:
         t0 = now()

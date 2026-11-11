@@ -3,7 +3,7 @@
     python analysis/launch_compare.py results/launch/<stamp> [--baseline given] [--out <dir>]
 
 Input layout (scripts/run_launch.sh): ``<stamp>/<rule>/N<level>_r<repeat>/``;
-``warmup/`` and ``record/`` are ignored. Works for scripts/run_g5.sh too, whose
+``warmup/``, ``record/`` and ``configs/`` are ignored. Works for scripts/run_g5.sh too, whose
 directories are arm labels (given, plan, history, history_cold50, ...). Each rule is compared with the baseline at the same
 repeat, where both started from the same shuffled batch.
 
@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     rows = []
-    for rule_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name not in ("analysis", "warmup", "record")):
+    for rule_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name not in ("analysis", "warmup", "record", "configs")):
         for cell in sorted(rule_dir.iterdir()):
             if (cell / "manifest.json").exists() and ".partial-" not in cell.name:
                 rows.append(cell_row(rule_dir.name, cell))

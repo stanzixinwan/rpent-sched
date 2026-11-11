@@ -58,14 +58,29 @@ class Background:
 
     def __init__(self, n: int, make) -> None:
         self.stop = threading.Event()
+        self.done = 0
+        self.failed = 0
+        self.last_error = None
         self.threads = [threading.Thread(target=self._loop, args=(make(i),), daemon=True) for i in range(n)]
 
     def _loop(self, worker) -> None:
         while not self.stop.is_set():
             try:
                 worker.once()
-            except Exception:
+                self.done += 1
+            except Exception as exc:
+                self.failed += 1
+                self.last_error = f"{type(exc).__name__}: {exc}"[:200]
                 time.sleep(0.5)
+
+    def wait_until_decoding(self, timeout_s: float = 120.0) -> None:
+        """Fail loudly unless the planner streams actually complete requests."""
+        deadline = time.time() + timeout_s
+        while self.done == 0:
+            if time.time() > deadline:
+                raise RuntimeError(f"planner streams completed nothing in {timeout_s:.0f} s "
+                                   f"({self.failed} failures; last: {self.last_error}); is the LLM up?")
+            time.sleep(0.5)
 
     def __enter__(self):
         for t in self.threads:
@@ -144,9 +159,9 @@ def main(argv: list[str] | None = None) -> None:
     setup = args.tag or "timeslice"
     try:
         for n_llm in args.llm_streams:
-            with Background(n_llm, make_llm):
+            with Background(n_llm, make_llm) as bg:
                 if n_llm:
-                    time.sleep(5)  # let the planner streams reach steady decoding
+                    bg.wait_until_decoding()
                 for b in args.batch_sizes:
                     obs = [batch_obs(b, rng) for _ in range(4)]
                     for k in range(args.warmup + args.iters):
@@ -162,7 +177,10 @@ def main(argv: list[str] | None = None) -> None:
                             log.write({"setup": setup, "llm_streams": n_llm, "batch": b, "iter": k - args.warmup,
                                        "t_start": t0, "lat_s": lat, "error": err,
                                        "shape": list(actions.shape) if actions is not None else None})
-                    print(f"{setup}, {n_llm} planner streams, B={b}: done", flush=True)
+                    print(f"{setup}, {n_llm} planner streams, B={b}: done "
+                          f"(planner requests so far: {bg.done} ok, {bg.failed} failed)", flush=True)
+                    if n_llm and bg.failed > bg.done:
+                        raise RuntimeError(f"planner streams mostly failing: {bg.last_error}")
     finally:
         log.close()
     summarize(out)

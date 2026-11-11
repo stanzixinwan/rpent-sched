@@ -21,6 +21,11 @@ fifo          at most ``--max-inflight`` requests at the backend, served in
 priority      like fifo, but serve the waiting request with the smallest
               ``X-RS-Priority`` header (e.g. predicted remaining work), minus
               ``--aging`` seconds of credit per second waited.
+batch         merge waiting ``vla.predict`` calls into one batched call and split
+              the actions back (``rsched.batching``): ``--max-batch``,
+              ``--batch-mode greedy|window|predict``, ``--batch-window-ms``,
+              ``--batch-intent`` (use ``X-RS-Burst-Left``). ``--max-batch 1`` is
+              FIFO through the same code path. Other methods pass straight through.
 
 Only methods listed in ``--gate-methods`` are queued; health checks and
 status calls always pass straight through.
@@ -41,11 +46,13 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from rsched import HDR_CALL, HDR_EPISODE, HDR_PRIORITY, HDR_TOOL
+from rsched import HDR_BURST_LEFT, HDR_CALL, HDR_EPISODE, HDR_PRIORITY, HDR_TOOL
+from rsched.batching import MODES as BATCH_MODES
+from rsched.batching import Batcher
 from rsched.traceio import JsonlWriter, now
 
 DEFAULT_GATE_METHODS = ("vla.predict", "sam3.segment", "molmo.ground")
-POLICIES = ("passthrough", "fifo", "priority")
+POLICIES = ("passthrough", "fifo", "priority", "batch")
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +81,7 @@ class Gate:
         if policy not in POLICIES:
             raise ValueError(f"unknown policy {policy!r}; choose from {POLICIES}")
         self.policy = policy
-        self.max_inflight = math.inf if policy == "passthrough" else max(1, max_inflight)
+        self.max_inflight = math.inf if policy in ("passthrough", "batch") else max(1, max_inflight)
         self.aging = float(aging)
         self._lock = threading.Lock()
         self._waiting: list[Ticket] = []
@@ -170,6 +177,7 @@ class ProxyServer(ThreadingHTTPServer):
         gate_methods: set[str],
         log: JsonlWriter | None,
         backend_timeout_s: float = 600.0,
+        batcher_args: dict | None = None,
     ) -> None:
         super().__init__(listen, _ProxyHandler)
         parsed = urllib.parse.urlsplit(backend if "://" in backend else f"http://{backend}")
@@ -182,6 +190,10 @@ class ProxyServer(ThreadingHTTPServer):
         self.gate_methods = gate_methods
         self.log = log
         self.backend_timeout_s = backend_timeout_s
+        self.batcher = None
+        if gate.policy == "batch":
+            self.batcher = Batcher(lambda body: self.forward("/call", body, "application/json")[1],
+                                   **(batcher_args or {}))
 
     def forward(self, path: str, body: bytes, content_type: str) -> tuple[int, bytes, str]:
         conn = http.client.HTTPConnection(
@@ -217,6 +229,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/rs/stats":
             payload = {"name": self.server.name, **self.server.gate.stats()}
+            if self.server.batcher is not None:
+                payload["batching"] = self.server.batcher.stats()
             self._reply(200, json.dumps(payload).encode())
         else:
             self._reply(404, b"{}")
@@ -237,6 +251,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         seen: dict[str, Any] = {}
         t_dispatch = t_arrive
+        parsed = srv.batcher.parse(body) if srv.batcher is not None and gated else None
+        if parsed is not None:
+            self._batched(parsed, t_arrive, method, priority, len(body))
+            return
+        if gated and srv.batcher is not None:
+            gated = False  # not batchable (e.g. another method): pass straight through
         if gated:
             ticket, seen = srv.gate.acquire(priority=priority)
             t_dispatch = ticket.t_dispatch or now()
@@ -283,6 +303,33 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             )
 
 
+    def _batched(self, parsed, t_arrive: float, method: str, priority: float, req_bytes: int) -> None:
+        srv = self.server
+        obs, options, session_id = parsed
+        try:
+            burst_left = int(self.headers.get(HDR_BURST_LEFT))
+        except (TypeError, ValueError):
+            burst_left = None
+        episode = self.headers.get(HDR_EPISODE)
+        item = srv.batcher.submit(obs, options, session_id, episode, burst_left)
+        self._reply(200, item.response)
+        if srv.log is not None:
+            srv.log.write(
+                {
+                    "type": "rpc", "service": srv.name, "method": method, "gated": True,
+                    "policy": "batch", "episode": episode, "call_id": self.headers.get(HDR_CALL),
+                    "tool": self.headers.get(HDR_TOOL),
+                    "priority": None if math.isinf(priority) else priority,
+                    "burst_left": burst_left, "batch_id": item.batch_id, "batch_size": item.batch_size,
+                    "t_arrive": t_arrive, "t_dispatch": item.t_dispatch, "t_done": item.t_done,
+                    "wait_s": item.t_dispatch - t_arrive, "service_s": item.t_done - item.t_dispatch,
+                    "queue_len_at_arrival": None, "inflight_at_arrival": None,
+                    "req_bytes": req_bytes, "resp_bytes": len(item.response), "http_status": 200,
+                    "ok": _peek_ok(item.response), "error": None,
+                }
+            )
+
+
 def build_server(args: argparse.Namespace) -> ProxyServer:
     gate = Gate(args.policy, args.max_inflight, args.aging)
     log = JsonlWriter(args.log) if args.log else None
@@ -294,6 +341,8 @@ def build_server(args: argparse.Namespace) -> ProxyServer:
         gate_methods=set(args.gate_methods),
         log=log,
         backend_timeout_s=args.backend_timeout_s,
+        batcher_args={"max_batch": args.max_batch, "mode": args.batch_mode,
+                      "window_s": args.batch_window_ms / 1e3, "use_intent": args.batch_intent},
     )
 
 
@@ -309,6 +358,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--gate-methods", nargs="*", default=list(DEFAULT_GATE_METHODS))
     p.add_argument("--backend-timeout-s", type=float, default=600.0)
     p.add_argument("--log", default=None, help="JSONL trace path")
+    p.add_argument("--max-batch", type=int, default=16, help="batch policy: largest merged call")
+    p.add_argument("--batch-mode", choices=BATCH_MODES, default="greedy")
+    p.add_argument("--batch-window-ms", type=float, default=0.0)
+    p.add_argument("--batch-intent", action="store_true", help="predict mode: use X-RS-Burst-Left")
     args = p.parse_args(argv)
 
     server = build_server(args)
@@ -318,7 +371,9 @@ def main(argv: list[str] | None = None) -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(
         f"rsched proxy [{args.name}] listening on http://{args.host}:{server.server_address[1]} "
-        f"-> {args.backend} policy={args.policy} max_inflight={args.max_inflight}",
+        f"-> {args.backend} policy={args.policy} max_inflight={args.max_inflight}"
+        + (f" batch={args.batch_mode} max={args.max_batch} window={args.batch_window_ms}ms"
+           f" intent={args.batch_intent}" if args.policy == "batch" else ""),
         flush=True,
     )
     stop.wait()

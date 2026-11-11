@@ -411,6 +411,12 @@ class Level:
                 "--aging", str(scfg.get("aging", 0.0)),
                 "--log", str(self.out / f"proxy_{svc}.jsonl"),
             ]
+            if scfg.get("policy") == "batch":  # rsched.batching
+                cmd += ["--max-batch", str(scfg.get("max_batch", 16)),
+                        "--batch-mode", str(scfg.get("batch_mode", "greedy")),
+                        "--batch-window-ms", str(scfg.get("batch_window_ms", 0.0))]
+                if scfg.get("batch_intent"):
+                    cmd.append("--batch-intent")
             self.procs.append(self._spawn(f"proxy_{svc}", cmd))
             endpoints[svc] = f"http://127.0.0.1:{port}"
         if self.cfg.get("gpu_sampler", True):

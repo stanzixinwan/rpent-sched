@@ -46,7 +46,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from rsched import HDR_CALL, HDR_EPISODE, HDR_PRIORITY, HDR_TOOL
+from rsched import HDR_BURST_LEFT, HDR_CALL, HDR_EPISODE, HDR_PRIORITY, HDR_TOOL
 from rsched import intent as intent_mod
 from rsched.traceio import JsonlWriter, now
 
@@ -253,6 +253,10 @@ def install(trace: JsonlWriter, episode: str, flash: bool = False) -> None:
         priority = INTENT.priority() if method in intent_mod.MODEL_METHODS else None
         if priority is not None:
             headers[HDR_PRIORITY] = repr(float(priority))
+        if method == "vla.predict" and INTENT.remaining is not None:
+            left = INTENT.remaining.burst_left()
+            if left is not None:
+                headers[HDR_BURST_LEFT] = str(left)  # read by the proxy's batch policy (--batch-intent)
 
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         t0 = now()

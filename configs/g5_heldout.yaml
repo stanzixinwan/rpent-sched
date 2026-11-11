@@ -31,19 +31,6 @@ services:
     policy: priority
     max_inflight: 1
 
-services:
-  vla:
-    backend: http://127.0.0.1:9000
-    policy: priority
-    max_inflight: 1
-  sam3:
-    backend: http://127.0.0.1:9001
-    policy: passthrough
-  molmo:
-    backend: http://127.0.0.1:9002
-    policy: priority
-    max_inflight: 1
-
 scheduling:
   mode: none
 

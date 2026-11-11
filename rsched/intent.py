@@ -160,6 +160,11 @@ class Remaining:
                 self.done["molmo"] += 1
 
     # -- estimates ------------------------------------------------------------
+    def burst_left(self) -> int | None:
+        """Chunks the pi0 call in progress may still use (including the one being requested)."""
+        with self._lock:
+            return max(self._cur_budget - self._cur_used, 0) if self._cur_budget else None
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             chunks_left = sum(b for _, _, b in self._pi0) + max(self._cur_budget - self._cur_used, 0)

@@ -58,6 +58,7 @@ from pathlib import Path
 
 import numpy as np
 
+from rsched import HDR_BURST_LEFT, HDR_EPISODE
 from rsched.bench_interference import LlmWorker, MolmoWorker, VlaWorker, filler
 from rsched.traceio import JsonlWriter, now, read_jsonl
 
@@ -299,6 +300,10 @@ def run_batch(run_id: str, episodes: list[list[Step]], level: int, coord: Coordi
                         t_b = now()
                         try:
                             for c in range(step.chunks):
+                                # what rsched.launch sends: the episode and the chunks the
+                                # pick may still use by its announced max_chunks
+                                w["vla"].set_headers({HDR_EPISODE: f"{run_id}/{ep}",
+                                                      HDR_BURST_LEFT: str(step.announced - c)})
                                 rec = w["vla"].once()
                                 coord.burst_chunk(ep)
                                 steps_log.write({**base, "chunk": c, "announced": step.announced,
@@ -462,6 +467,12 @@ def main(argv: list[str] | None = None) -> None:
     if not args.no_gpu_sampler:
         sampler = subprocess.Popen([sys.executable, "-m", "rsched.nvml", "--interval", "0.25",
                                     "--log", str(out / "gpu.jsonl")])
+    from rpent.utils.rpc.http_rpc import HttpRpcClient  # fail now, not as 100% errors in every run
+    for name, url in (("vla", args.vla_endpoint), ("molmo", args.molmo_endpoint)):
+        try:
+            HttpRpcClient(url).call("healthz", timeout_s=10)
+        except Exception as exc:
+            sys.exit(f"{name} endpoint {url} not answering: {exc}")
     runs_log, steps_log, events = (JsonlWriter(out / f) for f in ("runs.jsonl", "steps.jsonl", "events.jsonl"))
     period = args.vla_alone_s + args.vla_gap
     try:
