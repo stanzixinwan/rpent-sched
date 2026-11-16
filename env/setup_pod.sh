@@ -2,7 +2,7 @@
 # Everything a fresh cloud GPU pod (RunPod PyTorch template, root, A100 80GB)
 # needs before a sweep, in one go. Safe to rerun: finished steps are skipped.
 #
-#   cd /workspace && git clone --recursive https://github.com/stanzixinwan/rpent-sched.git
+#   cd /workspace && git clone --recursive <repository-url> rpent-sched
 #   cd rpent-sched && bash env/setup_pod.sh            # ~1-1.5 h, mostly downloads
 #   bash env/setup_pod.sh --launch                     # same, then start the services
 #

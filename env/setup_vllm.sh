@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Plan B: a local VLM planner served by vLLM on the same GPU as Pi0.5 and Molmo.
+# Co-location (B1, B2, X7): a local VLM planner served by vLLM on the same GPU as Pi0.5 and Molmo.
 # Run after env/setup_pod.sh. Safe to rerun.
 #
 #   bash env/setup_vllm.sh                              # Qwen2.5-VL-7B-Instruct (~17 GB)

@@ -1,5 +1,4 @@
 # G3: does planner intent beat FIFO and history when ordering queued model requests?
-# Plan and rationale: project doc claude/G3计划.md.
 #
 #   bash scripts/launch_services.sh
 #   bash scripts/run_g3.sh            # every mode x N x repeat, resumable
@@ -45,7 +44,7 @@ episode_env:
 
 episodes:
   # 4 per swap suite, chosen for spread in pi0 calls, chunk budget, and Molmo
-  # anchors (project doc claude/G3计划.md). Suites interleaved; seeds 0 then 1.
+  # anchors. Suites interleaved; seeds 0 then 1.
   list:
     - {suite: libero_10_swap,       task: 0, seed: 0}
     - {suite: libero_goal_swap,     task: 1, seed: 0}

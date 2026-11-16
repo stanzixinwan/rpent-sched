@@ -1,4 +1,4 @@
-"""Sample GPU memory and utilization to JSONL at a fixed interval.
+"""Sample GPU memory, utilization and power draw to JSONL at a fixed interval.
 
     python -m rsched.nvml --interval 0.5 --log results/run1/gpu.jsonl
 
@@ -23,6 +23,10 @@ def _sample_nvml(pynvml) -> list[dict]:
         h = pynvml.nvmlDeviceGetHandleByIndex(i)
         mem = pynvml.nvmlDeviceGetMemoryInfo(h)
         util = pynvml.nvmlDeviceGetUtilizationRates(h)
+        try:
+            power_w = pynvml.nvmlDeviceGetPowerUsage(h) / 1000.0  # NVML reports milliwatts
+        except pynvml.NVMLError:
+            power_w = None
         procs = []
         try:
             for p in pynvml.nvmlDeviceGetComputeRunningProcesses(h):
@@ -36,6 +40,7 @@ def _sample_nvml(pynvml) -> list[dict]:
                 "total_mb": mem.total / 2**20,
                 "util_gpu": util.gpu,
                 "util_mem": util.memory,
+                "power_w": power_w,
                 "procs": procs,
             }
         )
@@ -43,17 +48,21 @@ def _sample_nvml(pynvml) -> list[dict]:
 
 
 def _sample_smi() -> list[dict]:
-    q = "index,memory.used,memory.total,utilization.gpu,utilization.memory"
+    q = "index,memory.used,memory.total,utilization.gpu,utilization.memory,power.draw"
     text = subprocess.run(
         ["nvidia-smi", f"--query-gpu={q}", "--format=csv,noheader,nounits"],
         capture_output=True, text=True, check=True,
     ).stdout
     out = []
     for line in text.strip().splitlines():
-        i, used, total, ug, um = (x.strip() for x in line.split(","))
+        i, used, total, ug, um, pw = (x.strip() for x in line.split(","))
+        try:
+            power_w = float(pw)
+        except ValueError:  # "[N/A]" on GPUs without a power sensor
+            power_w = None
         out.append(
             {"gpu": int(i), "used_mb": float(used), "total_mb": float(total),
-             "util_gpu": float(ug), "util_mem": float(um), "procs": []}
+             "util_gpu": float(ug), "util_mem": float(um), "power_w": power_w, "procs": []}
         )
     return out
 

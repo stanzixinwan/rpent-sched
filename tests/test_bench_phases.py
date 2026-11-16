@@ -1,4 +1,4 @@
-"""B stage 2a: phase-structured episodes, coordinator policies, and freezing the planner server."""
+"""B2: phase-structured episodes, coordinator policies, and freezing the planner server."""
 
 from __future__ import annotations
 

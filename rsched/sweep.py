@@ -1,6 +1,6 @@
 """Run concurrent RPent episodes at several concurrency levels.
 
-    python -m rsched.sweep configs/p1_fifo_sweep.yaml [--levels 1 2 4] [--dry-run]
+    python -m rsched.sweep configs/g2_flash.yaml [--levels 1 2 4] [--dry-run]
 
 The model services (Pi0.5, SAM3, and Molmo for Flash) must already be running
 (see ``scripts/launch_services.sh``); loading them takes minutes, so they are
@@ -192,6 +192,41 @@ def cpu_info(root: str = "/sys/fs/cgroup") -> dict:
 THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS")
 
 
+def parse_cpus(spec: str | int | list | None) -> list[int] | None:
+    """``"0-7,16-19"`` (or a list, or one int) -> sorted CPU ids; None/"" -> None."""
+    if spec is None or spec == "":
+        return None
+    if isinstance(spec, int):
+        return [spec]
+    if isinstance(spec, (list, tuple)):
+        return sorted({int(x) for x in spec})
+    cpus: set[int] = set()
+    for part in str(spec).split(","):
+        lo, _, hi = part.strip().partition("-")
+        cpus.update(range(int(lo), int(hi or lo) + 1))
+    return sorted(cpus)
+
+
+def episode_cpus(cfg: dict) -> list[int] | None:
+    """``cpu: {episode_cpus: "0-15"}``: the cores episodes and their env_servers may use.
+
+    A CPU budget for the client side that does not depend on the pod's quota:
+    the sweep pins every episode process (children inherit it) to this set,
+    so "N episodes on k cores" can be varied on one machine. Model services and
+    proxies are not pinned here; keep them off these cores with SERVICE_CPUS
+    (scripts/launch_services.sh).
+    """
+    cpus = parse_cpus((cfg.get("cpu") or {}).get("episode_cpus"))
+    if cpus is None:
+        return None
+    if not hasattr(os, "sched_setaffinity"):
+        raise ValueError("cpu.episode_cpus needs Linux (os.sched_setaffinity)")
+    missing = set(cpus) - os.sched_getaffinity(0)
+    if missing:
+        raise ValueError(f"cpu.episode_cpus: CPUs {sorted(missing)} are not available to this process")
+    return cpus
+
+
 def wait_http(url: str, timeout_s: float = 30.0) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -376,6 +411,7 @@ class Level:
                  estimates: dict[tuple[str, int], float] | None = None) -> None:
         self.cfg, self.level, self.rep, self.out, self.dry_run = cfg, level, rep, out, dry_run
         self.estimates = estimates or {}
+        self.episode_cpus = episode_cpus(cfg)
         # Abort after this many consecutive episodes that exit without a single tool call.
         self.fail_fast = 0 if dry_run else int(cfg.get("fail_fast", 2))
         self.consecutive_failures = 0
@@ -385,23 +421,34 @@ class Level:
         (out / "traces").mkdir(exist_ok=True)
         (out / "episodes").mkdir(exist_ok=True)
 
-    def _spawn(self, name: str, cmd: list[str], env: dict | None = None) -> subprocess.Popen:
+    def _spawn(self, name: str, cmd: list[str], env: dict | None = None,
+               cpus: list[int] | None = None) -> subprocess.Popen:
         log = open(self.logs / f"{name}.log", "w")
         log.write("$ " + shlex.join(cmd) + "\n")
+        if cpus:
+            log.write(f"# pinned to CPUs {cpus}\n")
         log.flush()
         if self.dry_run:
             print("[dry-run]", shlex.join(cmd))
+        pin = (lambda: os.sched_setaffinity(0, cpus)) if cpus and not self.dry_run else None
         p = subprocess.Popen(
             cmd if not self.dry_run else [sys.executable, "-c", "pass"],
             stdout=log, stderr=subprocess.STDOUT, env={**os.environ, **(env or {})},
-            cwd=REPO_ROOT, start_new_session=True,
+            cwd=REPO_ROOT, start_new_session=True, preexec_fn=pin,
         )
         return p
 
     def start_infra(self) -> dict[str, str]:
         """Start one proxy per service plus the GPU sampler; return client endpoints."""
         endpoints = {}
+        direct = []
         for svc, scfg in self.cfg["services"].items():
+            if scfg.get("proxy", True) is False:
+                # No rsched proxy: episodes talk to the backend itself (overhead
+                # control, configs/overhead.yaml). Nothing is logged or queued.
+                endpoints[svc] = scfg["backend"]
+                direct.append(svc)
+                continue
             port = free_port()
             cmd = [
                 sys.executable, "-m", "rsched.proxy",
@@ -425,7 +472,8 @@ class Level:
             self.procs.append(self._spawn("gpu_sampler", cmd))
         if not self.dry_run:
             for svc, url in endpoints.items():
-                wait_http(url + "/rs/stats")
+                if svc not in direct:
+                    wait_http(url + "/rs/stats")
                 check_backend(url)
         return endpoints
 
@@ -494,7 +542,8 @@ class Level:
             env.update({"RS_EPISODE_ID": spec.episode_id, "RS_TRACE_DIR": str(self.out / "traces"),
                         "RS_SCHED": sched["mode"], "RS_COSTS": json.dumps(sched["costs"]),
                         "RS_HISTORY_FILE": str(self.out / "history.jsonl")})
-            p = self._spawn(f"episode_{spec.episode_id}", self.episode_cmd(spec, endpoints), env)
+            p = self._spawn(f"episode_{spec.episode_id}", self.episode_cmd(spec, endpoints), env,
+                            cpus=self.episode_cpus)
             running[spec.episode_id] = (p, time.time())
             launched.append({"episode": spec.episode_id, "t": time.time(), "estimate_s": est[spec.episode_id]})
             print(f"  start {spec.episode_id} {spec.suite} task={spec.task} seed={spec.seed} "
@@ -580,6 +629,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--cold", type=float, help="override launch.cold_fraction")
     ap.add_argument("--history-file", help="override launch.history_file")
     ap.add_argument("--episodes", type=int, help="override episodes_per_level (e.g. a short warm-up)")
+    ap.add_argument("--episode-cpus", help='override cpu.episode_cpus, e.g. "0-15" (pin episodes to these cores)')
     ap.add_argument("--out", default=None, help="output root (default results/<name>/<stamp>)")
     ap.add_argument("--dry-run", action="store_true", help="print commands, run nothing")
     ap.add_argument("--skip-preflight", action="store_true", help="skip the planner credential check")
@@ -603,6 +653,11 @@ def main(argv: list[str] | None = None) -> None:
         cfg["launch"] = {**(cfg.get("launch") or {}), "history_file": args.history_file}
     if args.episodes:
         cfg["episodes_per_level"] = args.episodes
+    if args.episode_cpus:
+        cfg["cpu"] = {**(cfg.get("cpu") or {}), "episode_cpus": args.episode_cpus}
+    pinned = episode_cpus(cfg)
+    if pinned:
+        print(f"cpu: episodes pinned to {len(pinned)} CPUs ({cfg['cpu']['episode_cpus']})")
     lc = launch_config(cfg)
     estimates, est_info = {}, {}
     if cfg.get("launch") and not args.dry_run:
@@ -632,6 +687,7 @@ def main(argv: list[str] | None = None) -> None:
                 "python": sys.version.split()[0], "gpus": gpu_info(),
                 "episode_env": cfg.get("episode_env") or {}, "scheduling": sched,
                 "launch_estimates": est_info, "cpu_start": cpu_info(),
+                "episode_cpus": pinned,
             }
             manifest.update(Level(cfg, level, rep, out, args.dry_run, estimates).run())
             manifest["cpu_end"] = cpu_info()

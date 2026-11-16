@@ -1,4 +1,4 @@
-"""B stage 2a: does moving GPU time between the planner and the VLA shorten a batch of agent episodes?
+"""B2: does moving GPU time between the planner and the VLA shorten a batch of agent episodes?
 
     python -m rsched.bench_phases --out results/b2a/<stamp> \
         --policies none vla_first intent:budget=2 history:budget=2 oracle:budget=2 \

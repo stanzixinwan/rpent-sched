@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NVIDIA MPS (multi-process service) for the B stage 2a baseline: with MPS the
+# NVIDIA MPS (multi-process service) for the B2 experiments: with MPS the
 # processes' kernels share the GPU's SMs at the same time instead of taking turns.
 #
 #   bash scripts/stop_services.sh      # MPS only applies to processes started after it

@@ -1,0 +1,67 @@
+# X1a (README, Experiments): the same tasks with an LLM planner in the loop.
+#
+# The 16 tasks x 2 seeds of the X2 batch, planner = Claude Code (as in RPent's
+# quick start; switch planner/model to what you have credit for). N = 1, 4, 8.
+# Live planners do not use Molmo (RPent rejects --molmo-endpoint outside Flash).
+#
+# Money: every episode is capped by --claude-code-max-budget-usd (3 here), so
+# a level costs at most 32 x 3 USD and usually far less; the sweep stops at
+# once on billing/auth errors. Run N=1 with --episodes 8 first and read the
+# per-episode cost from analysis/breakdown.py (cost_usd) before the rest.
+# model/extra_args follow RPent's quick start (Claude Code planner); check both
+# against the planner you actually use.
+name: x1_live_planner
+rpent:
+  robot: libero
+  libero_type: pro
+  planner: claude_code
+  model: claude-opus-4-8
+  cuda_device: 0
+  extra_args: [--memory-version, GPT_5.5_xhigh, --claude-code-max-budget-usd, '3']
+services:
+  vla: {backend: 'http://127.0.0.1:9000', policy: fifo, max_inflight: 1}
+  sam3: {backend: 'http://127.0.0.1:9001', policy: passthrough}
+episode_env: {OMP_NUM_THREADS: 1, MKL_NUM_THREADS: 1, OPENBLAS_NUM_THREADS: 1, NUMEXPR_NUM_THREADS: 1}
+episodes:
+  list:
+  - {suite: libero_10_swap, task: 1, seed: 1}
+  - {suite: libero_goal_swap, task: 2, seed: 1}
+  - {suite: libero_object_swap, task: 5, seed: 1}
+  - {suite: libero_spatial_swap, task: 4, seed: 1}
+  - {suite: libero_10_task, task: 2, seed: 1}
+  - {suite: libero_goal_task, task: 2, seed: 1}
+  - {suite: libero_object_task, task: 4, seed: 1}
+  - {suite: libero_spatial_task, task: 1, seed: 1}
+  - {suite: libero_10_swap, task: 6, seed: 1}
+  - {suite: libero_goal_swap, task: 9, seed: 1}
+  - {suite: libero_object_swap, task: 8, seed: 1}
+  - {suite: libero_spatial_swap, task: 6, seed: 1}
+  - {suite: libero_10_task, task: 6, seed: 1}
+  - {suite: libero_goal_task, task: 5, seed: 1}
+  - {suite: libero_object_task, task: 9, seed: 1}
+  - {suite: libero_spatial_task, task: 9, seed: 1}
+  - {suite: libero_10_swap, task: 1, seed: 2}
+  - {suite: libero_goal_swap, task: 2, seed: 2}
+  - {suite: libero_object_swap, task: 5, seed: 2}
+  - {suite: libero_spatial_swap, task: 4, seed: 2}
+  - {suite: libero_10_task, task: 2, seed: 2}
+  - {suite: libero_goal_task, task: 2, seed: 2}
+  - {suite: libero_object_task, task: 4, seed: 2}
+  - {suite: libero_spatial_task, task: 1, seed: 2}
+  - {suite: libero_10_swap, task: 6, seed: 2}
+  - {suite: libero_goal_swap, task: 9, seed: 2}
+  - {suite: libero_object_swap, task: 8, seed: 2}
+  - {suite: libero_spatial_swap, task: 6, seed: 2}
+  - {suite: libero_10_task, task: 6, seed: 2}
+  - {suite: libero_goal_task, task: 5, seed: 2}
+  - {suite: libero_object_task, task: 9, seed: 2}
+  - {suite: libero_spatial_task, task: 9, seed: 2}
+episode_timeout_s: 3600
+fail_fast: 3
+arrival: {mode: closed}
+gpu_sampler: true
+gpu_interval_s: 0.5
+launch: {rule: given, shuffle: true, seed: 0}
+concurrency: [1, 4, 8]
+episodes_per_level: 32
+repeats: 1

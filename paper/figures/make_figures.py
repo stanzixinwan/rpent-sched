@@ -1,10 +1,14 @@
-"""Paper figures from the result CSVs.
+"""Paper figures, from the CSVs the analysis scripts write under results/.
 
-    python paper/figures/make_figures.py --results results --out paper/figures
+    python paper/figures/make_figures.py [--results results] [--out paper/figures]
 
-Inputs (under --results): paper/breakdown_*.csv (analysis/episode_breakdown.py),
-b_feasibility/*/inflation.csv, b2a/*/interference_mps/inflation.csv,
-b_batch/*/batch.csv, b3/*/phases/summary.csv, g6/*/analysis/summary.csv.
+    anatomy.pdf      episode wall time by component     results/paper/anatomy/shares.csv  (analysis/anatomy.py)
+    bounds.pdf       first-order bound vs. measured     results/paper/bounds.csv          (analysis/bounds.py)
+    colocation.pdf   slowdown of co-located models      results/b_feasibility/*/inflation.csv,
+                                                         results/b2a/*/interference_mps/inflation.csv
+
+Colors: one fixed categorical order; queueing is the hatched version of its
+model's color, so the figures also read in grayscale.
 """
 
 from __future__ import annotations
@@ -18,18 +22,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-# Reference categorical palette (light), fixed order.
 C = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 GRAY = "#9a9893"
 INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-
 plt.rcParams.update({
     "font.family": "serif", "font.size": 7.5, "axes.titlesize": 8, "axes.labelsize": 7.5,
-    "xtick.labelsize": 7, "ytick.labelsize": 7, "legend.fontsize": 6.8, "axes.edgecolor": INK2,
+    "xtick.labelsize": 7, "ytick.labelsize": 7, "legend.fontsize": 6.5, "axes.edgecolor": INK2,
     "axes.labelcolor": INK, "xtick.color": INK2, "ytick.color": INK2, "axes.linewidth": 0.6,
-    "pdf.fonttype": 42, "ps.fonttype": 42,
+    "pdf.fonttype": 42, "ps.fonttype": 42, "hatch.linewidth": 0.6,
 })
-COL_W = 3.33  # one ACM column, inches
+COL_W = 3.45  # one IEEE column, inches
 
 
 def one(results: Path, pattern: str) -> Path:
@@ -46,49 +48,78 @@ def style(ax, grid_axis="x"):
     ax.set_axisbelow(True)
 
 
-# ---------------------------------------------------------------------------
-def fig_breakdown(results: Path, out: Path) -> None:
-    sets = [("G5, N=8\n(time-slicing)", "paper/breakdown_g5_N8.csv"),
-            ("G6, N=8\n(MPS)", "paper/breakdown_g6_N8.csv"),
-            ("G6, N=16\n(MPS)", "paper/breakdown_g6_N16.csv")]
+def fig_anatomy(results: Path, out: Path) -> None:
+    sh = pd.read_csv(results / "paper" / "anatomy" / "shares.csv")
+    sh = sh[sh["outcome"] == "all"].set_index("set")
+    rows = [("replay_N1", "N=1"), ("replay_N8_ts", "N=8\ntime-sliced"), ("replay_N8_mps", "N=8\nMPS"),
+            ("replay_N16_mps", "N=16\nMPS")]
+    rows = [(k, lab) for k, lab in rows if k in sh.index]
     parts = [  # label, columns, color, hatch
-        ("Simulator: reset", ["env_reset"], C[0], None),
-        ("Simulator: step, render", ["sim"], C[0], "////"),
-        ("Client-side Python", ["local"], C[1], None),
+        ("Sim: scene reset", ["sim_reset"], C[0], None),
+        ("Sim: step, render", ["sim_step", "sim_chunk_step", "sim_render", "sim_other"], C[0], "////"),
+        ("Client: inside tools", ["local_tools"], C[1], None),
+        ("Client: between tools", ["local_between"], C[1], "////"),
         ("Process start/exit", ["startup", "teardown"], GRAY, None),
-        ("Molmo", ["molmo_svc"], C[2], None),
-        ("Molmo queueing", ["molmo_wait"], C[2], "////"),
-        ("Pi0.5 (VLA)", ["vla_svc"], C[6], None),
-        ("Pi0.5 queueing", ["vla_wait"], C[6], "////"),
-        ("SAM3", ["sam3_svc", "sam3_wait"], C[3], None),
+        ("Grounding VLM", ["molmo_svc"], C[2], None),
+        ("Grounding VLM queue", ["molmo_wait"], C[2], "////"),
+        ("VLA", ["vla_svc"], C[6], None),
+        ("VLA queue", ["vla_wait"], C[6], "////"),
+        ("Segmentation", ["sam3_svc", "sam3_wait"], C[3], None),
     ]
-    fig, ax = plt.subplots(figsize=(COL_W, 1.75))
-    for y, (name, f) in enumerate(sets):
-        df = pd.read_csv(results / f)
-        total = df["wall_s"].sum()
+    fig, ax = plt.subplots(figsize=(COL_W, 2.05))
+    for y, (key, _) in enumerate(rows):
         left = 0.0
         for label, cols, color, hatch in parts:
-            w = sum(df[c].sum() for c in cols if c in df) / total * 100
-            ax.barh(y, w, left=left, color=color if hatch is None else "white", edgecolor=color if hatch
-                    else "white", hatch=hatch, linewidth=0.8 if hatch else 0.6, height=0.62,
-                    label=label if y == 0 else None)
+            w = float(sh.loc[key, cols].sum()) * 100
+            ax.barh(y, w, left=left, height=0.62, color=color if hatch is None else "white",
+                    edgecolor="white" if hatch is None else color, hatch=hatch,
+                    linewidth=0.8, label=label if y == 0 else None)
             if w >= 7:
-                ax.text(left + w / 2, y, f"{w:.0f}", ha="center", va="center", fontsize=6.5,
-                        color="white" if hatch is None and color != GRAY else INK)
+                ax.text(left + w / 2, y, f"{w:.0f}", ha="center", va="center", fontsize=6.3,
+                        color="white" if hatch is None and color != GRAY else INK,
+                        bbox=None if hatch is None else dict(facecolor="white", edgecolor="none", pad=0.4))
             left += w
-        ax.text(101, y, f"{df['wall_s'].mean():.0f} s", va="center", fontsize=6.5, color=INK2)
-    ax.set_yticks(range(len(sets)), [s for s, _ in sets])
+        ax.text(101, y, f"{sh.loc[key, 'wall_mean_s']:.0f} s", va="center", fontsize=6.5, color=INK2)
+    ax.set_yticks(range(len(rows)), [lab for _, lab in rows])
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
-    ax.set_xlabel("share of episode wall time (%)   [right: mean episode time]")
+    ax.set_xlabel("share of episode wall time (%); right: mean episode")
     style(ax)
-    ax.legend(ncol=3, loc="upper center", bbox_to_anchor=(0.42, -0.42), frameon=False,
-              handlelength=1.4, columnspacing=0.8)
-    fig.savefig(out / "breakdown.pdf", bbox_inches="tight")
+    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.46, 1.0), frameon=False, columnspacing=0.9,
+              handlelength=1.1, handletextpad=0.4)
+    fig.savefig(out / "anatomy.pdf", bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
+def fig_bounds(results: Path, out: Path) -> None:
+    df = pd.read_csv(results / "paper" / "bounds.csv")
+    df = df[df["measured_pct"].notna()].reset_index(drop=True)
+
+    def name(r):
+        if "synthetic" in r["workload"]:
+            return f"Batch VLA, synthetic, N={r['N']}"
+        if r["lever"].startswith("batch"):
+            return f"Batch VLA, real, N={r['N']}"
+        est = r["lever"][r["lever"].index("(") + 1:-1]
+        return f"Launch, {'tuning' if 'G4' in r['workload'] else 'held-out'}: {est}"
+
+    df["name"] = [name(r) for _, r in df.iterrows()]
+    fig, ax = plt.subplots(figsize=(COL_W, 0.27 * len(df) + 0.55))
+    y = range(len(df))
+    ax.barh(y, -df["bound_pct"], height=0.6, color="#cfcdc6", edgecolor="none", label="first-order bound")
+    ax.errorbar(-df["measured_pct"], y, xerr=[(df["ci_high"] - df["measured_pct"]).clip(lower=0),
+                                              (df["measured_pct"] - df["ci_low"]).clip(lower=0)],
+                fmt="o", color=C[0], markersize=3.2, elinewidth=0.9, capsize=1.8, label="measured (95% CI)")
+    ax.axvline(0, color=INK2, linewidth=0.6)
+    ax.set_yticks(list(y), df["name"])
+    ax.invert_yaxis()
+    ax.set_xlabel("makespan reduction (%)")
+    style(ax)
+    ax.legend(ncol=2, loc="lower right", bbox_to_anchor=(1.0, 1.0), frameon=False)
+    fig.savefig(out / "bounds.pdf", bbox_inches="tight", pad_inches=0.02)
+    plt.close(fig)
+
+
 def fig_colocation(results: Path, out: Path) -> None:
     ts = pd.read_csv(one(results, "b_feasibility/*/inflation.csv"))
     mps = pd.read_csv(one(results, "b2a/*/interference_mps/inflation.csv"))
@@ -117,51 +148,7 @@ def fig_colocation(results: Path, out: Path) -> None:
     ax.set_ylim(0, 3.7)
     style(ax, "y")
     ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2)
-    fig.savefig(out / "colocation.pdf", bbox_inches="tight")
-    plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
-def fig_batching(results: Path, out: Path) -> None:
-    bb = pd.read_csv(one(results, "b_batch/*/batch.csv"))
-    bb = bb[(bb["setup"] == "mps") & (bb["llm_streams"] == 4)].sort_values("batch")
-    b3 = pd.read_csv(one(results, "b3/*/phases/summary.csv"))
-    g6 = pd.read_csv(one(results, "g6/*/analysis/summary.csv"))
-
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(COL_W, 1.75), gridspec_kw={"width_ratios": [1, 1.2]})
-    a1.plot(bb["batch"], bb["lat_x_vs_b1"], color=C[0], marker="o", markersize=3.2, linewidth=1.4,
-            label="latency")
-    a1.plot(bb["batch"], bb["throughput_x_vs_b1"], color=C[1], marker="s", markersize=3.2, linewidth=1.4,
-            label="throughput")
-    a1.set_xscale("log", base=2)
-    a1.set_xticks([1, 2, 4, 8, 16], ["1", "2", "4", "8", "16"])
-    a1.set_xlabel("batch size")
-    a1.set_ylabel("× of batch 1")
-    a1.set_title("(a) Pi0.5 batch cost", loc="left")
-    style(a1, "y")
-    a1.legend(frameon=False, loc="upper left", handlelength=1.2, borderaxespad=0.1)
-    a1.set_ylim(0.5, 6.2)
-
-    bars = []
-    for lv in (8, 16):
-        r = b3[(b3["label"] == "none@greedy") & (b3["level"] == lv)].iloc[0]
-        bars.append((f"synth.\nN={lv}", r["vs_none_pct"], r["vs_none_ci"], C[2]))
-    for lv in (8, 16):
-        r = g6[(g6["rule"] == "greedy") & (g6["level"] == lv)].iloc[0]
-        bars.append((f"Flash\nN={lv}", r["makespan_pct_mean"],
-                     (r["ci95_high"] - r["ci95_low"]) / 2, C[6]))
-    for i, (lab, m, ci, col) in enumerate(bars):
-        a2.bar(i, m, 0.62, color=col, yerr=ci, error_kw={"elinewidth": 0.7, "capsize": 2, "ecolor": INK2})
-        a2.text(i, (m - ci - 3) if m < 0 else (m + ci + 2), f"{m:+.0f}%", ha="center",
-                va="top" if m < 0 else "bottom", fontsize=6.3, color=INK)
-    a2.axhline(0, color=INK2, linewidth=0.6)
-    a2.set_xticks(range(len(bars)), [b[0] for b in bars], fontsize=6.4)
-    a2.set_ylabel("makespan change (%)")
-    a2.set_ylim(-74, 25)
-    a2.set_title("(b) batching vs none", loc="left")
-    style(a2, "y")
-    fig.tight_layout(w_pad=1.0)
-    fig.savefig(out / "batching.pdf", bbox_inches="tight")
+    fig.savefig(out / "colocation.pdf", bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
 
@@ -169,13 +156,15 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default="results")
     ap.add_argument("--out", default="paper/figures")
+    ap.add_argument("--png", action="store_true", help="also write PNG previews")
     args = ap.parse_args(argv)
-    res, out = Path(args.results), Path(args.out)
+    results, out = Path(args.results), Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    fig_breakdown(res, out)
-    fig_colocation(res, out)
-    fig_batching(res, out)
-    print(f"wrote {out}/breakdown.pdf, colocation.pdf, batching.pdf")
+    if args.png:
+        plt.rcParams["savefig.dpi"] = 220
+    for f in (fig_anatomy, fig_bounds, fig_colocation):
+        f(results, out)
+    print(f"figures -> {out}")
 
 
 if __name__ == "__main__":

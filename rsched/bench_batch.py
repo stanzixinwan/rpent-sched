@@ -5,7 +5,7 @@
 
 RPent's Pi0.5 server already takes batched openpi observations
 (``predict_action_batch``; ``main_images [B,H,W,3]`` ...), but every agent sends
-B=1, so concurrent episodes queue one request at a time (stage 2a: VLA p50
+B=1, so concurrent episodes queue one request at a time (B2: VLA p50
 0.85 s at N=8 under MPS against 0.20 s alone). This sends batches of B distinct
 LIBERO-shaped observations straight to the server, back to back, and times them,
 optionally while ``--llm-streams`` closed-loop planner streams (vLLM) decode on

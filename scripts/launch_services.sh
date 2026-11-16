@@ -39,8 +39,10 @@ start() {  # $1 = name, $2 = port, rest = command
     log "$name already healthy on :$port"
     return
   fi
-  log "starting $name on :$port (log: results/services/$name.log)"
-  nohup "$@" >"$SERVICE_DIR/$name.log" 2>&1 &
+  log "starting $name on :$port (log: results/services/$name.log)${SERVICE_CPUS:+, CPUs $SERVICE_CPUS}"
+  # SERVICE_CPUS (e.g. "0-7") pins the model servers to their own cores, so a
+  # sweep that pins episodes elsewhere (cpu.episode_cpus) does not share them.
+  nohup ${SERVICE_CPUS:+taskset -c "$SERVICE_CPUS"} "$@" >"$SERVICE_DIR/$name.log" 2>&1 &
   echo $! >"$SERVICE_DIR/$name.pid"
 }
 

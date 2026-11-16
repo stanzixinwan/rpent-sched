@@ -362,8 +362,12 @@ def main(argv: list[str] | None = None) -> int:
     t0 = now()
     trace.write({"type": "episode_start", "episode": episode, "t": t0, "pid": os.getpid(), "argv": argv})
 
-    install(trace, episode, flash=_planner(argv) == "flash")
-    _patch_finalization(trace, episode)
+    # RS_TRACE=off: run rpent untouched (no hooks, no request headers) and keep
+    # only the start/end records, to measure what the tracing itself costs.
+    traced = os.environ.get("RS_TRACE", "on").strip().lower() not in ("off", "0", "false", "no")
+    if traced:
+        install(trace, episode, flash=_planner(argv) == "flash")
+        _patch_finalization(trace, episode)
 
     import rpent.cli.main as cli
 
@@ -377,7 +381,8 @@ def main(argv: list[str] | None = None) -> int:
         raise
     finally:
         t1 = now()
-        INTENT.finish()
+        if traced:
+            INTENT.finish()
         trace.write(
             {"type": "episode_end", "episode": episode, "t": t1, "elapsed_s": t1 - t0, "exit_code": code}
         )

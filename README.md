@@ -1,245 +1,163 @@
-# rsched: Look Before You Act
+# rsched: end-to-end tracing of harness-style embodied agents on a shared GPU
 
-Tracing and planner-aware scheduling for concurrent embodied agents.
-COMS 6998 AI-Native Computing (Fall 2026), Zixin Wan.
+Tools, configurations and analysis for measuring where the time goes when many
+episodes of an embodied-agent harness share one GPU. The harness under study is
+[RPent](https://github.com/RLinf/RPent): a planner, or a plan an LLM wrote once,
+calls a frozen VLA ($\pi_{0.5}$), a grounding VLM (Molmo2-8B) and a segmentation
+model (SAM3) as tools inside a LIBERO-PRO simulator.
 
-[RPent](https://github.com/RLinf/RPent) runs an LLM planner that calls embodied
-tools backed by shared GPU services (Pi0.5 VLA, SAM3). This repo measures where
-episode time goes as concurrency grows, and tests whether the planner's
-**pre-execution intent** (which primitive, with what arguments, e.g. `max_chunks`)
-predicts downstream VLA demand better than the history-based estimates used by
-current VLA serving systems.
+RPent is a pinned submodule (`third_party/RPent`, commit `ef70215`) and is **not
+modified**. Everything is measured through runtime hooks and per-model proxies:
 
 ```
- rpent episode ──(rsched.launch hooks)──► rsched proxy ──► Pi0.5 VLA service
- rpent episode ──────────────────────────►  (trace +   ──► SAM3 service
- rpent episode ──────────────────────────►   schedule)
-       │ per-episode env_server (simulator), traced client-side
-       ▼
- results/<sweep>/N<k>_r<rep>/  traces ─► analysis/breakdown.py ─► CSVs + figures
+ episode ──(rsched.launch hooks)──► rsched.proxy ──► Pi0.5 server
+ episode ─────────────────────────► (trace, queue, ──► Molmo2 server
+ episode ─────────────────────────►  order, batch) ──► SAM3 server
+    │ own env_server (MuJoCo), traced client-side
+    ▼
+ results/<experiment>/<stamp>/N<k>_r<rep>/   traces, proxy logs, GPU samples, manifest
+    └─► analysis/*.py ─► CSVs ─► paper/figures/make_figures.py
 ```
 
-RPent is a pinned submodule (`third_party/RPent`, commit `ef70215`) and is
-**not modified**. All tracing goes through the proxy and runtime hooks.
+## Requirements
 
-## Quick start
+- Linux (or WSL2 Ubuntu for development), an NVIDIA GPU with a CUDA 12 driver.
+  The measurements use one A100-SXM4-80GB; Pi0.5, SAM3 and Molmo2 together take
+  about 36 GB.
+- `git`, a C/C++ toolchain, [uv](https://docs.astral.sh/uv/), about 250 GB of disk
+  for checkpoints and assets.
+- A planner API key only for live-planner runs (`configs/live_planner.yaml`).
+- NVIDIA MPS (`nvidia-cuda-mps-control`) for the MPS experiments.
+- `py-spy` with ptrace rights for the profiling run.
 
-Requirements: Linux or WSL2 Ubuntu, NVIDIA GPU with a CUDA 12 driver, `git`,
-a C/C++ toolchain, [uv](https://docs.astral.sh/uv/). A planner API key only for
-live LLM-planner runs.
+## Setup
 
 ```bash
-git clone --recursive https://github.com/stanzixinwan/rpent-sched.git && cd rpent-sched
-bash env/setup.sh                 # RPent + LIBERO-PRO + checkpoints (long)
-$EDITOR env/.env                  # API key, ports, CUDA device
+git clone --recursive <repository-url> rpent-sched && cd rpent-sched
+bash env/setup.sh                 # RPent, LIBERO-PRO, checkpoints (long)
+cp env/.env.example env/.env      # API key, ports, checkpoint paths, CUDA device
 bash scripts/smoke_test.sh        # CPU only: proxy, hooks, sweep, analysis (~1 min)
-bash scripts/launch_services.sh   # load Pi0.5, then SAM3 (minutes)
+bash scripts/launch_services.sh   # load Pi0.5, SAM3 and (with MOLMO_CHECKPOINT_PATH) Molmo2
 bash scripts/smoke_test.sh --gpu  # one real episode end to end
 ```
 
-On a fresh cloud GPU pod (RunPod PyTorch template, A100 80GB, 250 GB disk),
-one script does all of it, including the Molmo venv and checkpoint for Flash
-sweeps, the MuJoCo EGL check, and the `env/.env` entries:
+On a fresh cloud GPU machine, `bash env/setup_pod.sh` does all of the above,
+including the Molmo2 environment and the MuJoCo EGL check (`--launch` also
+starts the services). Without a GPU: `bash env/setup.sh --no-gpu && uv pip
+install -e third_party/RPent`, then `bash scripts/smoke_test.sh`. Tests:
+`pytest tests` (CPU only; RPent's RPC classes against fake services).
 
-```bash
-cd /workspace && git clone --recursive https://github.com/stanzixinwan/rpent-sched.git
-cd rpent-sched && bash env/setup_pod.sh          # add --launch to start the services too
-```
-
-Without a GPU: `bash env/setup.sh --no-gpu && uv pip install -e third_party/RPent`,
-then `bash scripts/smoke_test.sh`.
-
-## Running a sweep
+## Running an experiment
 
 ```bash
 bash scripts/launch_services.sh
-python -m rsched.sweep configs/p1_laptop.yaml      # see configs/ for others
-python analysis/breakdown.py results/p1_laptop/<stamp>
+python -m rsched.sweep configs/g2_flash.yaml          # N episodes in flight per level
+python analysis/anatomy.py --set "N8=results/g2_flash/<stamp>/N8_r0" --out results/paper/anatomy
 ```
 
-`rsched.sweep` loads `env/.env`, checks planner credentials with
-`rpent-check-llm`, then keeps N episodes in flight per level. It aborts at once
-on planner billing/auth errors and after two consecutive episodes with no tool
-call. Each level writes `manifest.json` (config, commits, host, GPU, timings).
-Configs cap planner spend per episode (`--claude-code-max-budget-usd`).
+`rsched.sweep` keeps N episodes in flight from a fixed batch, starts a proxy per
+model service and a GPU sampler (utilization, memory, power) per cell, and
+writes a `manifest.json` per cell with the configuration, commits, GPU, cgroup
+CPU quota and throttling counters. It checks planner credentials first, aborts
+on billing or authentication errors, and stops after repeated episodes with no
+tool call. Drivers under `scripts/run_*.sh` run whole experiments: they pair
+arms on the same shuffled batch, rotate arm order between repeats, discard a
+warm-up cell, and resume where they stopped.
 
-**CPU threads.** In a container, `os.cpu_count()` reports the host (e.g. 128)
-while the cgroup grants far fewer CPUs, so every process sizes its OpenMP/BLAS
-pools for cores it does not have. In G2 this made `env.step` 60x slower at N=4.
-Configs therefore set `episode_env` (thread caps for each episode and its
-`env_server`), and `launch_services.sh` caps each service with `SERVICE_THREADS`
-(default 4; 2 on a 13.6-CPU pod). Each manifest records the cgroup CPU quota
-and throttle counters at level start and end (`cpu_start`, `cpu_end`).
+Configuration knobs used by the experiments:
 
-`breakdown.py` splits each episode's wall time into components that sum to it:
+| knob | effect |
+|---|---|
+| `episode_env` | environment of every episode and its simulator (thread caps: see below) |
+| `cpu.episode_cpus`, `--episode-cpus "8-23"` | pin episodes and their simulators to these cores |
+| `SERVICE_CPUS=0-7` (`launch_services.sh`) | pin the model servers to their own cores |
+| `services.<name>.policy` | proxy policy: `passthrough`, `fifo`, `priority` (with aging), `batch` |
+| `services.<name>.proxy: false` | no proxy: episodes call the model server directly |
+| `RS_TRACE=off` (in `episode_env`) | run RPent without hooks (overhead control) |
+| `scheduling.mode` | request priority from the plan's or the history's remaining work |
+| `launch.rule`, `launch.estimate` | episode launch order (`given`, `lpt`, `jit_lpt`, ...) and its length estimate (`plan`, `history`, `hybrid`) |
+
+**CPU threads.** In a container, `os.cpu_count()` reports the host while the
+cgroup grants far fewer CPUs, so every process sizes its OpenMP/BLAS pools for
+cores it does not have; this made `env.step` 60x slower in our runs. Configs
+cap threads per episode (`episode_env`), `launch_services.sh` caps each service
+(`SERVICE_THREADS`, default 4), and manifests record the quota and throttling.
+
+## Time accounting
+
+`analysis/anatomy.py` splits every episode's wall time into parts that add up to
+it exactly (RPCs within an episode are sequential):
 
 | component | meaning |
 |---|---|
-| `startup` | launch until first tool call or model RPC (simulator spawn, memory, first plan) |
-| `planner` | time outside tools and RPCs (LLM time; for Flash, replay logic) |
-| `vla_wait`, `vla_service` | VLA requests queued at the proxy / running at the backend |
-| `sam3_wait`, `sam3_service` | same for SAM3 |
-| `molmo_wait`, `molmo_service` | same for Molmo grounding (Flash only) |
-| `sim` | simulator RPCs made inside tools |
-| `rpc_overhead` | client RPC time not explained by wait + service |
-| `tool_other` | remaining tool time (scripted control, Python) |
+| `startup`, `teardown` | process start to first RPC; last RPC to exit |
+| `sim_reset`, `sim_step`, `sim_chunk_step`, `sim_render`, `sim_other` | simulator RPCs by method |
+| `local_tools`, `local_between` | client-side time between RPCs, inside a tool / between tools (plan replay or LLM) |
+| `<model>_wait`, `<model>_svc` | model requests (vla, molmo, sam3): queued at the proxy / in service |
 
-Outputs: `episodes.csv`, `levels.csv`, `tools.csv`, `breakdown.png`,
-`vla_wait_cdf.png`. Proxy policies: `passthrough` (RPent's own unordered
-behaviour), `fifo`, `priority` with aging (reads the `X-RS-Priority` header).
+It also writes RPC counts and latencies per method, client-side time per tool,
+and the split by task outcome. `analysis/breakdown.py` is the earlier
+per-level summary (throughput, cost, queueing CDFs).
 
-## Intent scheduling (G3)
+## Experiments
 
-A Flash plan states, before the episode starts, every primitive it will run,
-each pick's chunk budget (`max_chunks`), and every anchor Molmo will ground.
-`rsched/intent.py` counts that work down as the episode runs and prices it in
-seconds (per-primitive costs from G2 at N=1). With `scheduling.mode` (or
-`--sched`) set, every model request carries the estimate as `X-RS-Priority`,
-and the VLA and Molmo proxies (`policy: priority`) serve the smallest first:
+Results go to `results/<name>/<stamp>/` (not version-controlled). Paper
+sections refer to `paper/main.tex`.
 
-| mode | order |
-|---|---|
-| `none` | arrival order (FIFO; no header) |
-| `intent_srpt` / `intent_lrpt` | least / most remaining work in the plan first |
-| `history_srpt` / `history_lrpt` | same, but remaining = mean work of episodes already finished in this run minus work done |
+| id | question | config | driver | analysis | paper |
+|---|---|---|---|---|---|
+| G2 | episode anatomy vs. concurrency, N = 1, 4, 8, 16 | `g2_flash.yaml` (`g2_flash_uncapped.yaml`: thread-cap control) | `python -m rsched.sweep` | `anatomy.py`, `breakdown.py`, `intent.py` | §4 |
+| G3 | ordering model requests by remaining work | `g3.yaml` | `run_g3.sh` | `g3_compare.py`, `g3_sim.py` (trace replay) | §7 |
+| G4 | episode launch order, tuning tasks | `g4_launch.yaml` | `run_launch.sh` | `launch_compare.py` | §7 |
+| G5 | launch order on held-out tasks; plan vs. history estimates | `g5_record.yaml`, `g5_heldout.yaml` | `run_g5.sh` | `launch_compare.py`, `holdout.py`, `history_baseline.py` | §4, §7 |
+| G6 | cross-episode VLA batching on real episodes, under MPS | `g6_batch.yaml` | `run_g6.sh` | `launch_compare.py --baseline nobatch`, `anatomy.py` | §4, §7 |
+| B1 | interference of co-located planner, VLA, grounding model | — | `run_b_feasibility.sh` (`rsched.bench_interference`) | `inflation.csv` | §6 |
+| B2 | MPS vs. time-slicing; pausing the planner during VLA bursts | — | `run_b2a.sh`, `run_b2a_mps.sh` (`rsched.bench_phases`) | `summary.csv` | §6, §7 |
+| B3 | Pi0.5 batch cost; batching on an agent-like synthetic workload | — | `run_b_batch.sh` (`rsched.bench_batch`), `run_b3.sh` | `batch.csv`, `summary.csv` | §7 |
+| X0 | cost of the tracing (hooks, proxies) | `overhead.yaml` | `run_overhead.sh` | `overhead.py` | §3 |
+| X1 | the same tasks with an LLM planner in the loop | `live_planner.yaml` | `python -m rsched.sweep` | `anatomy.py` | §4 |
+| X2 | concurrency × CPU budget (bottleneck migration, energy) | `cpu_scaling.yaml` | `run_cpu_scaling.sh` | `anatomy.py`, `gpu_util.py` | §5 |
+| X3 | sampling profile of episodes and simulators | `profile.yaml` | `run_profile.sh` | `profile_summary.py` | §4 |
+| X7 | real episodes with a local planner on the same GPU | `local_planner.yaml` | `launch_llm.sh`, then `python -m rsched.sweep` | `anatomy.py` | §6 |
 
-```bash
-bash scripts/launch_services.sh
-bash scripts/run_g3.sh                       # modes x N=8,16 x 3 repeats; resumable
-python analysis/g3_compare.py results/g3/<stamp>
-```
+Cross-experiment analysis: `analysis/bounds.py` (first-order bound vs. measured
+effect of each lever), `analysis/gpu_util.py` (GPU busy fraction, memory,
+energy per episode). Figures: `python paper/figures/make_figures.py`.
 
-`g3_compare.py` compares each mode with FIFO at the same N and repeat
-(`summary.csv`, `g3_compare.png`), drops cells whose CPU throttling exceeds 5%
-of the makespan, and scores how well each estimate ranks episodes by their
-true remaining time (`predict.csv`). Episode traces log `plan_work` once and a
-`remaining` record at every tool start, in every mode. `analysis/intent.py`
-now fits on other tasks (`--holdout task`, the default), not just other episodes.
-
-## Launch order (G4)
-
-For a fixed batch, `launch.rule` decides which episode enters a free slot,
-from each episode's planned work (the Flash plan priced with `rsched/intent.py`,
-known before launch): `given` (list order; `launch.shuffle` randomizes it per
-repeat), `lpt`, `spt`, `front`, `front_back`, or `jit_lpt`, which starts a long
-episode only once it would otherwise become the batch's tail. The rules live in
-`rsched/launch_order.py`, shared with the trace-driven simulator
-(`analysis/g3_sim.py launch`), which predicts about -14% makespan for 32
-episodes at N=8. Plans come from RPent's memory sync unless `launch.plans_dir`
-is set.
-
-```bash
-bash scripts/launch_services.sh
-bash scripts/run_launch.sh                   # warm-up, then given vs jit_lpt x 4 repeats; resumable
-python analysis/launch_compare.py results/launch/<stamp>
-```
-
-## Held-out tasks and history baselines (G5)
-
-`launch.estimate` chooses what the launch rule orders by: `plan` (default),
-`history` (a table "task -> measured wall time" from an earlier run,
-`launch.history_file`), or `hybrid` (history where it exists, the plan
-elsewhere); `launch.cold_fraction` treats a fixed share of the tasks as never
-run. `scripts/run_g5.sh` records every Flash task once, builds the history
-table (`python -m rsched.history_table`), then compares random launch with
-JIT-LPT by plan, by history, and by history with half the tasks cold, on 16
-tasks never used to build or tune anything (`configs/g5_heldout.yaml`).
-
-```bash
-bash scripts/launch_services.sh
-bash scripts/run_g5.sh                       # ~20 min record + 4 arms x 5 repeats; resumable
-python analysis/launch_compare.py results/g5/<stamp> --baseline given
-```
-
-Out-of-sample checks in the simulator (no GPU): `analysis/holdout.py` tests the
-default cost table and JIT knob on tasks that did not shape them, and on random
-task splits with refitting; `analysis/history_baseline.py` compares the plan
-with per-task history, including cold start.
-
-## Plan B: a local planner on the same GPU
-
-Next direction (project doc `投稿评估.md`): serve the planner locally (a VLM via
-vLLM) on the GPU that runs Pi0.5 and Molmo, and use its tool calls as advance
-notice to move GPU time between the models. First, a feasibility test of how
-much they interfere:
-
-```bash
-bash env/setup_vllm.sh                    # .venv-vllm + Qwen2.5-VL-7B-Instruct (once)
-bash scripts/launch_services.sh && bash scripts/launch_llm.sh
-bash scripts/run_b_feasibility.sh         # ~20 min: robot models and planner, alone and together
-```
-
-`rsched/bench_interference.py` drives closed-loop synthetic load (VLA predicts
-with the chunk-step gap of a real pick, Molmo groundings, streamed planner
-completions with an image and a ~4k-token prompt) and reports, per scenario,
-latency percentiles, throughput, planner TTFT and time per output token, and
-each model's slowdown against running alone (`inflation.csv`).
-
-Result (A100, `results/b_feasibility/20261110-160531`): Pi0.5 is ~2.2x slower
-whenever the planner decodes, whether it serves 1 or 16 streams, and the
-planner's time per token goes up 1.3-2.5x: the processes take turns on the GPU.
-Stage 2a asks whether coordinating them helps and whether MPS already does:
-
-```bash
-bash scripts/run_b2a.sh                   # ~1.5-2 h; results/b2a/<stamp>/
-```
-
-`rsched/bench_phases.py` runs batches of synthetic agent episodes
-(planner call -> optional Molmo grounding -> a burst of Pi0.5 chunks, repeated)
-and a coordinator that freezes the planner server (SIGSTOP/SIGCONT on the vLLM
-process tree) while a burst runs, under different policies: never (`none`),
-always (`vla_first`), or only when a burst is about to end by its announced
-`max_chunks` (`intent`), by the mean burst length (`history`), or by its true
-length (`oracle`). Stage 2 restarts the services under MPS (`scripts/mps.sh`)
-and repeats the uncoordinated batches and the interference scenarios. If a run
-is killed while the planner is frozen: `python -m rsched.bench_phases --resume-llm`
-(`scripts/stop_services.sh` also thaws it).
-
-Result: MPS alone makes the batches 24-30% faster; on top of MPS no pausing
-policy helps. What is left is the VLA queue: the Pi0.5 server takes batched
-observations, but every agent sends one at a time. Next check (~25 min):
-
-```bash
-bash scripts/run_b_batch.sh               # Pi0.5 latency for batch 1..16, +/- planner load, +/- MPS
-```
-
-A batch of 8 costs ~1.95x a batch of 1 (4x the throughput). The proxy can now
-merge concurrent `vla.predict` calls (`--policy batch`, `rsched/batching.py`):
-`greedy` sends everything waiting when Pi0.5 frees up; `window` holds the
-oldest call a few ms; `predict` holds it only while another episode inside a
-pick is expected to send its next chunk, and with `--batch-intent` uses the
-pick's `max_chunks` (header `X-RS-Burst-Left`, sent by `rsched.launch`) to stop
-waiting for episodes whose pick is over.
-
-```bash
-bash scripts/run_b3.sh                    # ~2 h: agent-like batches through each batching variant, MPS
-bash scripts/run_g6.sh                    # ~2-2.5 h: real Flash episodes (G5 held-out batch), N=8/16
-```
+The co-location experiments (B1, B2, X7) serve a local VLM planner with vLLM
+next to the robot models: `bash env/setup_vllm.sh` once, then
+`bash scripts/launch_llm.sh`; `bash scripts/mps.sh start` before starting the
+services switches to MPS. The proxy's `batch` policy merges concurrent
+`vla.predict` calls into one batched call (`rsched/batching.py`; dispatch
+`greedy`, `window`, or `predict`, optionally using the pick's `max_chunks`).
 
 ## Layout
 
 ```
-rsched/proxy.py     tracing + scheduling proxy
-rsched/launch.py    `python -m rsched.launch <rpent args>`: rpent with tracing hooks
-rsched/sweep.py     concurrency sweeps, preflight, fail-fast, manifests
-rsched/intent.py    remaining work from a Flash plan; scheduling priorities
-rsched/launch_order.py  launch-order rules and estimates (sweep and simulator)
-rsched/history_table.py per-task history table from earlier sweep levels
-rsched/bench_interference.py  plan B: planner / robot-model interference on one GPU
-rsched/bench_phases.py  plan B 2a: agent-like batches with planner/VLA coordination
-rsched/bench_batch.py   Pi0.5 latency vs batch size (go/no-go for cross-episode batching)
-rsched/batching.py      cross-episode batching of vla.predict (proxy --policy batch)
-rsched/nvml.py      GPU memory / utilization sampler
-analysis/           time breakdown, intent prediction, G3 mode comparison
-configs/            one YAML per experiment
-scripts/            services, smoke test, G3 driver
-env/                setup script, .env template
-tests/              CPU tests on RPent's real RPC classes with fake services
-docs/               RPent notes, troubleshooting
-third_party/RPent   pinned upstream (read-only)
+rsched/proxy.py           tracing proxy: queueing, ordering, batching policies
+rsched/batching.py        cross-episode batching of vla.predict (proxy --policy batch)
+rsched/launch.py          python -m rsched.launch <rpent args>: rpent with tracing hooks
+rsched/sweep.py           concurrency sweeps, CPU pinning, preflight, fail-fast, manifests
+rsched/intent.py          remaining work from a stored plan; request priorities
+rsched/launch_order.py    launch-order rules and length estimates (sweep and replay)
+rsched/history_table.py   per-task runtime history from earlier runs
+rsched/bench_*.py         microbenchmarks: interference, agent-like phases, batch cost
+rsched/nvml.py            GPU utilization, memory and power sampler
+rsched/molmo_server.py    Molmo2 server with a point parser for both output formats
+analysis/                 per-episode accounting, experiment comparisons, bounds, replay
+configs/                  one YAML per experiment
+scripts/                  services, MPS, experiment drivers, smoke test
+env/                      setup scripts, .env template
+tests/                    CPU tests on RPent's RPC classes with fake services
+paper/                    paper draft and figure script
+docs/                     RPent behaviour this project relies on; troubleshooting
+third_party/RPent         pinned upstream (read-only)
 ```
 
-## Docs
+See [`docs/rpent_notes.md`](docs/rpent_notes.md) for the RPent internals the
+tracing depends on (with source references) and
+[`docs/troubleshooting.md`](docs/troubleshooting.md) for setup problems.
 
-- [`docs/rpent_notes.md`](docs/rpent_notes.md): RPent behaviour this project relies on, with source references
-- [`docs/troubleshooting.md`](docs/troubleshooting.md): WSL2, missing libraries, planner credentials
+## License
+
+Apache License 2.0 (`LICENSE`), the same as RPent.

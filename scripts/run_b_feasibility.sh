@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Plan B feasibility: interference between a local VLM planner (vLLM) and the
+# B1: interference between a local VLM planner (vLLM) and the
 # robot models (Pi0.5, Molmo) on one GPU. ~20 min with the default scenarios.
 #
 #   bash scripts/launch_services.sh && bash scripts/launch_llm.sh

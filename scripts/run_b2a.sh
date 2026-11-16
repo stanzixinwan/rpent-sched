@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# B stage 2a: can moving GPU time between the planner and the VLA shorten a batch
+# B2: can moving GPU time between the planner and the VLA shorten a batch
 # of agent episodes, and does MPS already fix the interference? ~1.5-2 h on an A100.
 #
 #   bash scripts/launch_services.sh && bash scripts/launch_llm.sh

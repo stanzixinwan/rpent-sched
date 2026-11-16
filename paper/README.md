@@ -1,18 +1,26 @@
 # Paper draft
 
-Workshop draft (ACM sigplan, 10pt, two columns; EuroMLSys-style 6-page limit).
+IEEE conference format, 10pt, two columns, 9 pages excluding references,
+double-blind.
 
 ```bash
-python paper/figures/make_figures.py --results results --out paper/figures   # figures from result CSVs
+python analysis/anatomy.py \
+  --set "replay_N1=results/g2_flash/20261024-204239/N1_r0" \
+  --set "replay_N4=results/g2_flash/20261024-193111/N4_r0" \
+  --set "replay_N8_ts=results/g5/*/given/N8_r*" \
+  --set "replay_N8_mps=results/g6/*/nobatch/N8_r*" \
+  --set "replay_N16_mps=results/g6/*/nobatch/N16_r*" \
+  --out results/paper/anatomy
+python analysis/bounds.py
+python paper/figures/make_figures.py
 cd paper && latexmk -pdf main.tex
 ```
 
-`acmart.cls` and `ACM-Reference-Format.bst` are bundled (built from the acmart
-GitHub sources) so the draft builds without a full TeX Live; Overleaf has both.
-Without the Libertine fonts the local build falls back to Latin Modern, so the
-page count on Overleaf can differ slightly.
+`main.tex` uses `IEEEtran` (Overleaf, or a full TeX Live). Without the class it
+falls back to a two-column `article` so the text and figures can be checked;
+page counts are only valid with the real class.
 
-Figure inputs: `results/paper/breakdown_*.csv` (`analysis/episode_breakdown.py`
-over the G5 `given` and G6 `nobatch` cells), `results/b_feasibility`,
-`results/b2a/*/interference_mps`, `results/b_batch`, `results/b3`,
-`results/g6/*/analysis`. Bibliography entries marked TODO need checking.
+`\todo{...}` marks text that waits for an experiment (ids as in the top-level
+README); `\num{...}` marks numbers copied from a script's output, to re-check
+whenever the scripts are rerun. Keep author names, repository URLs and machine
+names out of this directory.

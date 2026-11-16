@@ -1,6 +1,6 @@
 """Does planner intent predict VLA demand better than history?
 
-    python analysis/intent.py results/p1_laptop/<stamp> [--out dir]
+    python analysis/intent.py results/g2_flash/<stamp> [--out dir]
 
 One row per primitive (one tool call). Two labels, both known only after the
 call returns:

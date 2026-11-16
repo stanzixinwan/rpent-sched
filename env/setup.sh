@@ -14,7 +14,7 @@ NO_GPU=0
 
 if [[ "$RS_ROOT" == /mnt/* ]]; then
   die "repo is on a Windows drive ($RS_ROOT). Under WSL, clone into the Linux filesystem instead,
-  e.g.  cd ~ && git clone --recursive https://github.com/stanzixinwan/rpent-sched.git
+  e.g.  cd ~ && git clone --recursive <repository-url> rpent-sched
   (/mnt/* breaks git file modes and line endings, and is much slower for pip and MuJoCo)"
 fi
 

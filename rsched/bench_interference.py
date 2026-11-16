@@ -3,7 +3,7 @@
     python -m rsched.bench_interference --out results/b_feasibility/<stamp> \
         --scenarios vla=1 llm=4 vla=1,llm=4 ...
 
-Plan B (project doc 投稿评估.md): put the planner on the same GPU as Pi0.5 and
+B1: put the planner on the same GPU as Pi0.5 and
 Molmo, and use the planner's tool calls (e.g. ``pi0_pick(max_chunks=12)``) as
 advance notice to move GPU time between them. That is only worth building if
 the models interfere. This measures it with closed-loop synthetic load, straight

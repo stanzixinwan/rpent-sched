@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# B stage 2a, follow-up: does coordination still help once the servers run under
+# B2, follow-up: does coordination still help once the servers run under
 # MPS, and is "intent" better than its budget? ~1.5 h on an A100.
 #
 #   bash scripts/run_b2a_mps.sh 20261110-212217     # the stamp of the run_b2a.sh run

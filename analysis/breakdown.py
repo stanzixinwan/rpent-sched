@@ -1,6 +1,6 @@
 """Where does episode time go? Join episode, proxy, and GPU traces for a sweep.
 
-    python analysis/breakdown.py results/p1_fifo_sweep/<stamp> [--out figures/p1]
+    python analysis/breakdown.py results/g2_flash/<stamp> [--out dir]
 
 For every episode, wall-clock time is split into components that add up:
 
