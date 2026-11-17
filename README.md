@@ -113,6 +113,7 @@ sections refer to `paper/main.tex`.
 | G5 | launch order on held-out tasks; plan vs. history estimates | `g5_record.yaml`, `g5_heldout.yaml` | `run_g5.sh` | `launch_compare.py`, `holdout.py`, `history_baseline.py` | §4, §7 |
 | G6 | cross-episode VLA batching on real episodes, under MPS | `g6_batch.yaml` | `run_g6.sh` | `launch_compare.py --baseline nobatch`, `anatomy.py` | §4, §7 |
 | B1 | interference of co-located planner, VLA, grounding model | — | `run_b_feasibility.sh` (`rsched.bench_interference`) | `inflation.csv` | §6 |
+| B1b | B1 under time-slicing and MPS in one session (same machine) | — | `run_colocation.sh` | `inflation.csv` | §6 |
 | B2 | MPS vs. time-slicing; pausing the planner during VLA bursts | — | `run_b2a.sh`, `run_b2a_mps.sh` (`rsched.bench_phases`) | `summary.csv` | §6, §7 |
 | B3 | Pi0.5 batch cost; batching on an agent-like synthetic workload | — | `run_b_batch.sh` (`rsched.bench_batch`), `run_b3.sh` | `batch.csv`, `summary.csv` | §7 |
 | M1 | single models: RPC / host / GPU split, stages, prefill vs decode, operator mix, analytic roofline, energy, Pi0.5 batch scaling | `record_requests.yaml` | `run_model_profile.sh` (`rsched.profiled_server`, `rsched.bench_models`) | `model_profile.py` | §4 |

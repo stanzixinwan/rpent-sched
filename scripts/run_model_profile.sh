@@ -52,7 +52,7 @@ for d in vla sam3 molmo; do
   n=$(find "$REQ/$d" -name '*.json' 2>/dev/null | wc -l)
   log "recorded $d requests: $n"
 done
-nvidia-smi --query-gpu=name,memory.total,driver_version,clocks.max.sm,power.limit --format=csv > "$ROOT/gpu_info.csv" || true
+bash scripts/record_platform.sh "$ROOT"
 bash scripts/stop_services.sh
 
 # 2. one model at a time, alone on the GPU

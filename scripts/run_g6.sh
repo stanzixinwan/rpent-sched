@@ -23,6 +23,7 @@ read -r -a ARMS <<<"${G6_ARMS:-nobatch greedy intent30}"
 read -r -a LEVELS <<<"${G6_LEVELS:-8 16}"
 REPEATS="${G6_REPEATS:-3}"
 mkdir -p "$ROOT/configs"
+bash scripts/record_platform.sh "$ROOT"
 
 restart() {  # $1 = with MPS (1) or not (0)
   bash scripts/stop_services.sh

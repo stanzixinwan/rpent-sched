@@ -224,7 +224,7 @@ With planner and grounding model both active, the VLA is 3.3$\times$ slower
 (Fig.~\ref{fig:coloc}).
 
 \paragraph{MPS removes most of it.} The same pairs slow down by 1.1--1.5$\times$ under MPS,
-at a cost of about \pct{25} for a model running alone. Batches of agent-like episodes finish
+at a small cost for a model running alone (\todo{re-measure on one machine with scripts/run\_colocation.sh; the earlier 25\% compared two runs, a same-session check gave 2\%}). Batches of agent-like episodes finish
 \pct{30.1} ($\pm$2.7, $N{=}8$) and \pct{24.2} ($\pm$11.7, $N{=}4$) sooner.
 \todo{X7: the same comparison on real episodes with the local planner in the loop; state
 clearly that the numbers above use a synthetic episode mix.}

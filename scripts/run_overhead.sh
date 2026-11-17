@@ -16,6 +16,7 @@ ARMS=(full proxy_only bare)
 read -r -a LEVELS <<<"${X0_LEVELS:-1 8}"
 REPEATS="${X0_REPEATS:-3}"
 mkdir -p "$ROOT/configs"
+bash scripts/record_platform.sh "$ROOT"
 bash scripts/launch_services.sh status
 
 python - "$ROOT/configs" <<'PY'

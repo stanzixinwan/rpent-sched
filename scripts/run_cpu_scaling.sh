@@ -28,6 +28,7 @@ REPEATS="${X2_REPEATS:-3}"
 FIRST="${X2_FIRST_CPU:-8}"
 CFG="configs/cpu_scaling.yaml"
 mkdir -p "$ROOT"
+bash scripts/record_platform.sh "$ROOT"
 
 # The quota must cover the largest budget plus the service cores, or the cells
 # measure throttling instead of the budget.
