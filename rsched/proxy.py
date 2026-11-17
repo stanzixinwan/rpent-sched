@@ -44,6 +44,7 @@ import threading
 import urllib.parse
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from rsched import HDR_BURST_LEFT, HDR_CALL, HDR_EPISODE, HDR_PRIORITY, HDR_TOOL
@@ -162,6 +163,31 @@ def _peek_method(body: bytes) -> str | None:
         return None
 
 
+class RequestDump:
+    """Keeps the first ``per_episode`` request bodies of each episode, per method.
+
+    Bodies are written verbatim (``<dir>/<method>/<episode>_<n>.json``) so that
+    ``rsched.bench_models`` can replay real observations and prompts later.
+    """
+
+    def __init__(self, root: str, per_episode: int) -> None:
+        self.root = Path(root)
+        self.per_episode = int(per_episode)
+        self._counts: dict[tuple[str, str], int] = {}
+        self._lock = threading.Lock()
+
+    def maybe_save(self, method: str, episode: str | None, body: bytes) -> None:
+        key = (method, episode or "none")
+        with self._lock:
+            n = self._counts.get(key, 0)
+            if n >= self.per_episode:
+                return
+            self._counts[key] = n + 1
+        out = self.root / method / f"{key[1]}_{n:03d}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(body)
+
+
 class ProxyServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
@@ -178,8 +204,10 @@ class ProxyServer(ThreadingHTTPServer):
         log: JsonlWriter | None,
         backend_timeout_s: float = 600.0,
         batcher_args: dict | None = None,
+        dump: RequestDump | None = None,
     ) -> None:
         super().__init__(listen, _ProxyHandler)
+        self.dump = dump
         parsed = urllib.parse.urlsplit(backend if "://" in backend else f"http://{backend}")
         if parsed.scheme != "http":
             raise ValueError("only http:// backends are supported (start services with --transport http)")
@@ -244,6 +272,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         method = _peek_method(body)
 
         gated = method in srv.gate_methods
+        if gated and srv.dump is not None:
+            srv.dump.maybe_save(method, self.headers.get(HDR_EPISODE), body)
         try:
             priority = float(self.headers.get(HDR_PRIORITY, "inf"))
         except ValueError:
@@ -343,6 +373,8 @@ def build_server(args: argparse.Namespace) -> ProxyServer:
         backend_timeout_s=args.backend_timeout_s,
         batcher_args={"max_batch": args.max_batch, "mode": args.batch_mode,
                       "window_s": args.batch_window_ms / 1e3, "use_intent": args.batch_intent},
+        dump=RequestDump(args.dump_dir, args.dump_per_episode) if args.dump_dir and args.dump_per_episode > 0
+        else None,
     )
 
 
@@ -362,6 +394,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--batch-mode", choices=BATCH_MODES, default="greedy")
     p.add_argument("--batch-window-ms", type=float, default=0.0)
     p.add_argument("--batch-intent", action="store_true", help="predict mode: use X-RS-Burst-Left")
+    p.add_argument("--dump-dir", default=None, help="save request bodies of gated methods here")
+    p.add_argument("--dump-per-episode", type=int, default=0, help="bodies kept per episode and method")
     args = p.parse_args(argv)
 
     server = build_server(args)

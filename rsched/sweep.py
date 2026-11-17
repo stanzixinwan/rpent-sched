@@ -464,6 +464,9 @@ class Level:
                         "--batch-window-ms", str(scfg.get("batch_window_ms", 0.0))]
                 if scfg.get("batch_intent"):
                     cmd.append("--batch-intent")
+            if int(scfg.get("dump_per_episode", 0)) > 0:  # keep request bodies for rsched.bench_models
+                cmd += ["--dump-dir", str(self.out / "requests" / svc),
+                        "--dump-per-episode", str(int(scfg["dump_per_episode"]))]
             self.procs.append(self._spawn(f"proxy_{svc}", cmd))
             endpoints[svc] = f"http://127.0.0.1:{port}"
         if self.cfg.get("gpu_sampler", True):

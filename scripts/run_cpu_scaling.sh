@@ -15,7 +15,7 @@
 #   X2_REPEATS=3
 #   X2_FIRST_CPU=8            episodes use cores X2_FIRST_CPU .. X2_FIRST_CPU+budget-1
 #   X2_MPS=1                  run under MPS (0 = default time-slicing)
-#   X2_SKIP_OVERSUB=0         1 = skip cells with more episodes than 2x cores
+#   X2_SKIP_OVERSUB=1         skip cells with more than 2 episodes per core (0 = run them too)
 # Short levels use fewer episodes (N=1: 8, N=4: 16) to keep the run within a day.
 set -euo pipefail
 source "$(dirname "$0")/../common.sh"
@@ -79,7 +79,7 @@ for (( r = 0; r < REPEATS; r++ )); do
       k=$(( k + 1 ))
       cell="$ROOT/c$budget/N${level}_r${r}"
       if [[ -f "$cell/manifest.json" ]]; then log "[$k/$total] skip c=$budget N=$level r=$r (done)"; continue; fi
-      if [[ "${X2_SKIP_OVERSUB:-0}" == 1 ]] && (( level > 2 * budget )); then
+      if [[ "${X2_SKIP_OVERSUB:-1}" == 1 ]] && (( level > 2 * budget )); then
         log "[$k/$total] skip c=$budget N=$level r=$r (more than 2 episodes per core)"; continue
       fi
       [[ -d "$cell" ]] && mv "$cell" "$cell.partial-$(date +%H%M%S)"

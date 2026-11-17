@@ -28,7 +28,7 @@ modified**. Everything is measured through runtime hooks and per-model proxies:
   for checkpoints and assets.
 - A planner API key only for live-planner runs (`configs/live_planner.yaml`).
 - NVIDIA MPS (`nvidia-cuda-mps-control`) for the MPS experiments.
-- `py-spy` with ptrace rights for the profiling run.
+- `py-spy` with ptrace rights for the profiling run; `nvidia-ml-py` for energy.
 
 ## Setup
 
@@ -74,6 +74,7 @@ Configuration knobs used by the experiments:
 | `services.<name>.policy` | proxy policy: `passthrough`, `fifo`, `priority` (with aging), `batch` |
 | `services.<name>.proxy: false` | no proxy: episodes call the model server directly |
 | `RS_TRACE=off` (in `episode_env`) | run RPent without hooks (overhead control) |
+| `services.<name>.dump_per_episode` | the proxy saves the first request bodies of each episode (replayed by `rsched.bench_models`) |
 | `scheduling.mode` | request priority from the plan's or the history's remaining work |
 | `launch.rule`, `launch.estimate` | episode launch order (`given`, `lpt`, `jit_lpt`, ...) and its length estimate (`plan`, `history`, `hybrid`) |
 
@@ -114,6 +115,7 @@ sections refer to `paper/main.tex`.
 | B1 | interference of co-located planner, VLA, grounding model | — | `run_b_feasibility.sh` (`rsched.bench_interference`) | `inflation.csv` | §6 |
 | B2 | MPS vs. time-slicing; pausing the planner during VLA bursts | — | `run_b2a.sh`, `run_b2a_mps.sh` (`rsched.bench_phases`) | `summary.csv` | §6, §7 |
 | B3 | Pi0.5 batch cost; batching on an agent-like synthetic workload | — | `run_b_batch.sh` (`rsched.bench_batch`), `run_b3.sh` | `batch.csv`, `summary.csv` | §7 |
+| M1 | single models: RPC / host / GPU split, stages, prefill vs decode, operator mix, analytic roofline, energy, Pi0.5 batch scaling | `record_requests.yaml` | `run_model_profile.sh` (`rsched.profiled_server`, `rsched.bench_models`) | `model_profile.py` | §4 |
 | X0 | cost of the tracing (hooks, proxies) | `overhead.yaml` | `run_overhead.sh` | `overhead.py` | §3 |
 | X1 | the same tasks with an LLM planner in the loop | `live_planner.yaml` | `python -m rsched.sweep` | `anatomy.py` | §4 |
 | X2 | concurrency × CPU budget (bottleneck migration, energy) | `cpu_scaling.yaml` | `run_cpu_scaling.sh` | `anatomy.py`, `gpu_util.py` | §5 |
@@ -141,7 +143,8 @@ rsched/sweep.py           concurrency sweeps, CPU pinning, preflight, fail-fast,
 rsched/intent.py          remaining work from a stored plan; request priorities
 rsched/launch_order.py    launch-order rules and length estimates (sweep and replay)
 rsched/history_table.py   per-task runtime history from earlier runs
-rsched/bench_*.py         microbenchmarks: interference, agent-like phases, batch cost
+rsched/bench_*.py         microbenchmarks: interference, agent-like phases, batch cost, model replay
+rsched/profiled_server.py RPent model server with per-call timing, stage hooks, torch.profiler
 rsched/nvml.py            GPU utilization, memory and power sampler
 rsched/molmo_server.py    Molmo2 server with a point parser for both output formats
 analysis/                 per-episode accounting, experiment comparisons, bounds, replay
