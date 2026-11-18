@@ -218,6 +218,9 @@ def episode_cpus(cfg: dict) -> list[int] | None:
     """
     cpus = parse_cpus((cfg.get("cpu") or {}).get("episode_cpus"))
     if cpus is None:
+        # RS_PIN=1 (env/.env): the machine-wide layout of rsched.cpu_layout, set by scripts/common.sh
+        cpus = parse_cpus(os.environ.get("RS_EPISODE_CPUS")) if os.environ.get("RS_PIN") == "1" else None
+    if cpus is None:
         return None
     if not hasattr(os, "sched_setaffinity"):
         raise ValueError("cpu.episode_cpus needs Linux (os.sched_setaffinity)")
@@ -412,6 +415,8 @@ class Level:
         self.cfg, self.level, self.rep, self.out, self.dry_run = cfg, level, rep, out, dry_run
         self.estimates = estimates or {}
         self.episode_cpus = episode_cpus(cfg)
+        # proxies and the GPU sampler stay off the episode cores (RS_PIN=1)
+        self.infra_cpus = parse_cpus(os.environ.get("RS_INFRA_CPUS")) if os.environ.get("RS_PIN") == "1" else None
         # Abort after this many consecutive episodes that exit without a single tool call.
         self.fail_fast = 0 if dry_run else int(cfg.get("fail_fast", 2))
         self.consecutive_failures = 0
@@ -467,12 +472,12 @@ class Level:
             if int(scfg.get("dump_per_episode", 0)) > 0:  # keep request bodies for rsched.bench_models
                 cmd += ["--dump-dir", str(self.out / "requests" / svc),
                         "--dump-per-episode", str(int(scfg["dump_per_episode"]))]
-            self.procs.append(self._spawn(f"proxy_{svc}", cmd))
+            self.procs.append(self._spawn(f"proxy_{svc}", cmd, cpus=self.infra_cpus))
             endpoints[svc] = f"http://127.0.0.1:{port}"
         if self.cfg.get("gpu_sampler", True):
             cmd = [sys.executable, "-m", "rsched.nvml", "--interval",
                    str(self.cfg.get("gpu_interval_s", 0.5)), "--log", str(self.out / "gpu.jsonl")]
-            self.procs.append(self._spawn("gpu_sampler", cmd))
+            self.procs.append(self._spawn("gpu_sampler", cmd, cpus=self.infra_cpus))
         if not self.dry_run:
             for svc, url in endpoints.items():
                 if svc not in direct:
@@ -658,9 +663,14 @@ def main(argv: list[str] | None = None) -> None:
         cfg["episodes_per_level"] = args.episodes
     if args.episode_cpus:
         cfg["cpu"] = {**(cfg.get("cpu") or {}), "episode_cpus": args.episode_cpus}
+    if os.environ.get("RS_PIN") == "1" and not os.environ.get("RS_EPISODE_CPUS"):
+        from rsched.cpu_layout import fmt, layout
+        svc_cpus, eps_cpus = layout(int(os.environ.get("RS_SERVICE_CORES", 8)), int(os.environ.get("RS_EPISODE_CORES", 24)))
+        os.environ.update(RS_EPISODE_CPUS=fmt(eps_cpus), RS_INFRA_CPUS=fmt(svc_cpus))
     pinned = episode_cpus(cfg)
     if pinned:
-        print(f"cpu: episodes pinned to {len(pinned)} CPUs ({cfg['cpu']['episode_cpus']})")
+        print(f"cpu: episodes pinned to {len(pinned)} CPUs; proxies and sampler on "
+              f"{os.environ.get('RS_INFRA_CPUS') or 'any CPU'}")
     lc = launch_config(cfg)
     estimates, est_info = {}, {}
     if cfg.get("launch") and not args.dry_run:
@@ -691,6 +701,8 @@ def main(argv: list[str] | None = None) -> None:
                 "episode_env": cfg.get("episode_env") or {}, "scheduling": sched,
                 "launch_estimates": est_info, "cpu_start": cpu_info(),
                 "episode_cpus": pinned,
+                "infra_cpus": os.environ.get("RS_INFRA_CPUS") if os.environ.get("RS_PIN") == "1" else None,
+                "service_cpus": os.environ.get("SERVICE_CPUS"),
             }
             manifest.update(Level(cfg, level, rep, out, args.dry_run, estimates).run())
             manifest["cpu_end"] = cpu_info()

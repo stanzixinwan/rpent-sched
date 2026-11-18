@@ -70,6 +70,7 @@ Configuration knobs used by the experiments:
 |---|---|
 | `episode_env` | environment of every episode and its simulator (thread caps: see below) |
 | `cpu.episode_cpus`, `--episode-cpus "8-23"` | pin episodes and their simulators to these cores |
+| `RS_PIN=1`, `RS_SERVICE_CORES`, `RS_EPISODE_CORES` (`env/.env`) | one CPU layout for every experiment on a machine (`rsched/cpu_layout.py`): model servers, proxies and GPU sampler on the service CPUs, episodes on the episode CPUs |
 | `SERVICE_CPUS=0-7` (`launch_services.sh`) | pin the model servers to their own cores |
 | `services.<name>.policy` | proxy policy: `passthrough`, `fifo`, `priority` (with aging), `batch` |
 | `services.<name>.proxy: false` | no proxy: episodes call the model server directly |
@@ -147,6 +148,7 @@ rsched/history_table.py   per-task runtime history from earlier runs
 rsched/bench_*.py         microbenchmarks: interference, agent-like phases, batch cost, model replay
 rsched/profiled_server.py RPent model server with per-call timing, stage hooks, torch.profiler
 rsched/nvml.py            GPU utilization, memory and power sampler
+rsched/cpu_layout.py      service / episode CPU sets in topology order
 rsched/molmo_server.py    Molmo2 server with a point parser for both output formats
 analysis/                 per-episode accounting, experiment comparisons, bounds, replay
 configs/                  one YAML per experiment

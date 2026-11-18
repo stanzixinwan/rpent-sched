@@ -28,7 +28,7 @@ for mode in timeslice mps; do
   log "$mode"
   restart "$([[ $mode == mps ]] && echo 1 || echo 0)"
   bash scripts/mps.sh status > "$ROOT/mps_status_$mode.txt" 2>&1 || true
-  python -m rsched.bench_interference --out "$ROOT/$mode" "$@"
+  ${RS_EPISODE_CPUS:+taskset -c "$RS_EPISODE_CPUS"} python -m rsched.bench_interference --out "$ROOT/$mode" "$@"
 done
 log "done: $ROOT  (compare $ROOT/timeslice/inflation.csv with $ROOT/mps/inflation.csv; solo rows in summary.csv)"
 log "copy back: tar czf /workspace/colocation.tgz -C $RS_ROOT results/colocation/$STAMP && runpodctl send /workspace/colocation.tgz"

@@ -75,13 +75,13 @@ for svc in "${SERVICES[@]}"; do
   esac
   log "$svc: starting profiled server on :$port"
   OMP_NUM_THREADS="${SERVICE_THREADS:-4}" MKL_NUM_THREADS="${SERVICE_THREADS:-4}" \
-    nohup "${cmd[@]}" >"$out/server.log" 2>&1 &
+    nohup ${SERVICE_CPUS:+taskset -c "$SERVICE_CPUS"} "${cmd[@]}" >"$out/server.log" 2>&1 &
   pid=$!
   for _ in $(seq 180); do healthy "$port" && break; kill -0 "$pid" 2>/dev/null || { tail -n 30 "$out/server.log"; die "$svc server exited"; }; sleep 5; done
   healthy "$port" || die "$svc server not ready"
   extra=()
   [[ $svc == vla ]] && extra=(--batches "${BATCHES[@]}")
-  python -m rsched.bench_models --service "$svc" --url "http://127.0.0.1:$port" --requests "$REQ/$svc" \
+  ${RS_INFRA_CPUS:+taskset -c "$RS_INFRA_CPUS"} python -m rsched.bench_models --service "$svc" --url "http://127.0.0.1:$port" --requests "$REQ/$svc" \
     --out "$out" --gpu "$CUDA_DEVICE" --calls "$CALLS" "${extra[@]}" || { kill "$pid"; die "$svc benchmark failed"; }
   kill "$pid"; wait "$pid" 2>/dev/null || true
 done
