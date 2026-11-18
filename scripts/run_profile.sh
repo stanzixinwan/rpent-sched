@@ -4,7 +4,7 @@
 #   bash scripts/run_profile.sh        # results/profile/<stamp>/
 #   python analysis/profile_summary.py results/profile/<stamp>/N*_r0/traces
 set -euo pipefail
-source "$(dirname "$0")/../common.sh"
+source "$(dirname "$0")/common.sh"
 command -v py-spy >/dev/null || die "py-spy not found: uv pip install py-spy"
 STAMP="${1:-$(date +%Y%m%d-%H%M%S)}"
 ROOT="$RS_ROOT/results/profile/$STAMP"

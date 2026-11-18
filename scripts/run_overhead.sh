@@ -8,7 +8,7 @@
 # N=1 and N=8, X0_REPEATS (3) repeats, arm order rotating. Services must be up.
 # Afterwards: python analysis/overhead.py results/overhead/<stamp>
 set -euo pipefail
-source "$(dirname "$0")/../common.sh"
+source "$(dirname "$0")/common.sh"
 
 STAMP="${1:-$(date +%Y%m%d-%H%M%S)}"
 ROOT="$RS_ROOT/results/overhead/$STAMP"
