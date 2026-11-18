@@ -40,7 +40,8 @@ def wait_up(port: int, proc: subprocess.Popen) -> None:
     deadline = time.time() + 60
     while time.time() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError("server exited")
+            err = proc.stderr.read().decode(errors="replace")[-3000:] if proc.stderr else ""
+            raise RuntimeError(f"server exited with code {proc.returncode}:\n{err}")
         try:
             if call(port, json.dumps({"method": "healthz", "args": [], "kwargs": {}}).encode()).get("ok"):
                 return
@@ -65,11 +66,12 @@ def test_profile_pipeline(tmp_path):
     port, pport = free_port(), free_port()
     log = tmp_path / "run" / "vla" / "server.jsonl"
     server = subprocess.Popen([sys.executable, "-m", "rsched.profiled_server", "--service", "vla", "--log", str(log),
-                               "--", "tests.fakes.fake_model_server", "--port", str(port)],
+                               "--", str(FAKES / "fake_model_server.py"), "--port", str(port)],
                               cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     proxy = subprocess.Popen([sys.executable, "-m", "rsched.proxy", "--name", "vla", "--listen", str(pport),
                               "--backend", f"http://127.0.0.1:{port}", "--dump-dir", str(tmp_path / "req"),
-                              "--dump-per-episode", "3"], cwd=ROOT, env=env, stdout=subprocess.DEVNULL)
+                              "--dump-per-episode", "3"], cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.PIPE)
     try:
         wait_up(port, server)
         wait_up(pport, proxy)

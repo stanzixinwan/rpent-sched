@@ -4,7 +4,7 @@
         rpent.robots.components.pi05_vla_server --embodiment libero --transport http --port 9100
     python -m rsched.profiled_server --service molmo --log ... -- rsched.molmo_server --transport http --port 9102
 
-Everything after ``--`` is the module to run and its own arguments, exactly as
+Everything after ``--`` is the module (or a ``.py`` path) to run and its own arguments, exactly as
 ``scripts/launch_services.sh`` starts it. RPent is not modified: before the
 module runs, its RPC classes are patched in this process only.
 
@@ -374,7 +374,10 @@ def main(argv: list[str] | None = None) -> None:
     prof = Profiler(args.service, _Log(args.log), args.stage_depth, args.stage_match)
     install(prof)
     sys.argv = [module, *mod_args]
-    runpy.run_module(module, run_name="__main__", alter_sys=True)
+    if module.endswith(".py"):  # a script path (tests); a module name otherwise
+        runpy.run_path(module, run_name="__main__")
+    else:
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
 
 
 if __name__ == "__main__":
