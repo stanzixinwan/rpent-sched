@@ -6,8 +6,9 @@ Expects <root>/<arm>/N<level>_r<rep>/traces/episode_*.jsonl for the arms
 ``full``, ``proxy_only`` and ``bare`` (scripts/run_overhead.sh).
 Every arm writes ``episode_start`` / ``episode_end``, so wall time is measured
 the same way in all three. Reports, per level, the mean episode time of each
-arm and the paired difference to ``bare`` (same repeat) with a 95% t-interval,
-and writes overhead.csv next to the cells.
+arm and the paired difference to ``bare``: per repeat (cell means) and per
+episode (same suite, task, seed and repeat; geometric mean of the time ratios),
+each with a 95% interval, and writes overhead.csv next to the cells.
 """
 
 from __future__ import annotations
@@ -22,18 +23,33 @@ import pandas as pd
 T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262}
 
 
-def cell_mean(cell: Path) -> tuple[float, int]:
-    walls = []
+def _arg(argv: list, flag: str):
+    return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+def cell_walls(cell: Path) -> dict[tuple, float]:
+    """Episode wall time keyed by (suite, task, seed)."""
+    walls = {}
     for f in (cell / "traces").glob("episode_*.jsonl"):
-        start = end = None
+        start = end = key = None
         for line in f.open():
             if '"episode_start"' in line:
-                start = json.loads(line)["t"]
+                rec = json.loads(line)
+                start = rec["t"]
+                argv = rec.get("argv") or []
+                key = (_arg(argv, "--suite"), _arg(argv, "--task"), _arg(argv, "--seed"), f.stem)
             elif '"episode_end"' in line:
                 rec = json.loads(line)
                 end = rec["t"] if rec.get("exit_code") is not None else None
         if start is not None and end is not None:
-            walls.append(float(end) - float(start))
+            # same task and seed may appear twice in a cell; keep them apart by order
+            k = key[:3] if key[:3] not in walls else key
+            walls[k] = float(end) - float(start)
+    return walls
+
+
+def cell_mean(cell: Path) -> tuple[float, int]:
+    walls = list(cell_walls(cell).values())
     return (sum(walls) / len(walls) if walls else math.nan), len(walls)
 
 
@@ -60,6 +76,23 @@ def main(argv=None) -> None:
             half = T95.get(n - 1, 1.96) * d.std(ddof=1) / math.sqrt(n) if n > 1 else math.nan
             out.append({"level": level, "arm": arm, "repeats": n, "bare_wall_s": g["bare"].mean(),
                         "arm_wall_s": g[arm].mean(), "overhead_pct": d.mean(), "ci95_half": half})
+    # per-episode pairing: same task, seed and repeat in both arms
+    eps = {}
+    for arm_dir in (p for p in root.iterdir() if p.is_dir() and p.name in ("full", "proxy_only", "bare")):
+        for cell in arm_dir.glob("N*_r*"):
+            level, rep = cell.name[1:].split("_r")
+            for k, w in cell_walls(cell).items():
+                eps.setdefault((int(level), int(rep), k), {})[arm_dir.name] = w
+    for row in out:
+        lr = [math.log(v[row["arm"]] / v["bare"]) for (lvl, _, _), v in eps.items()
+              if lvl == row["level"] and row["arm"] in v and "bare" in v]
+        n = len(lr)
+        if n > 1:
+            m = sum(lr) / n
+            se = math.sqrt(sum((x - m) ** 2 for x in lr) / (n - 1) / n)
+            row.update({"paired_episodes": n, "ep_overhead_pct": 100 * (math.exp(m) - 1),
+                        "ep_ci95_lo": 100 * (math.exp(m - 1.96 * se) - 1),
+                        "ep_ci95_hi": 100 * (math.exp(m + 1.96 * se) - 1)})
     res = pd.DataFrame(out)
     res.to_csv(root / "overhead.csv", index=False)
     print(cells.groupby(["level", "arm"])[["episodes", "wall_mean_s"]].mean().round(2).to_string())
