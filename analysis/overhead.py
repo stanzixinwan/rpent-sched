@@ -1,6 +1,7 @@
 """X0: episode wall time with and without the tracing, from the start/end records.
 
     python analysis/overhead.py results/overhead/<stamp>
+    python analysis/overhead.py results/artifacts/<stamp> --baseline store --arms lazy
 
 Expects <root>/<arm>/N<level>_r<rep>/traces/episode_*.jsonl for the arms
 ``full``, ``proxy_only`` and ``bare`` (scripts/run_overhead.sh).
@@ -54,9 +55,18 @@ def cell_mean(cell: Path) -> tuple[float, int]:
 
 
 def main(argv=None) -> None:
-    root = Path((argv or sys.argv[1:])[0])
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("root")
+    ap.add_argument("--baseline", default="bare")
+    ap.add_argument("--arms", nargs="+", default=["proxy_only", "full"])
+    args = ap.parse_args(argv)
+    root = Path(args.root)
+    base_arm, arms = args.baseline, args.arms
+    known = {base_arm, *arms}
     rows = []
-    for arm_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name in ("full", "proxy_only", "bare")):
+    for arm_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name in known):
         for cell in sorted(arm_dir.glob("N*_r*")):
             level, rep = cell.name[1:].split("_r")
             mean, n = cell_mean(cell)
@@ -68,24 +78,24 @@ def main(argv=None) -> None:
     wide = cells.pivot_table(index=["level", "repeat"], columns="arm", values="wall_mean_s")
     out = []
     for level, g in wide.groupby(level="level"):
-        for arm in ("proxy_only", "full"):
-            if arm not in g or "bare" not in g:
+        for arm in arms:
+            if arm not in g or base_arm not in g:
                 continue
-            d = ((g[arm] - g["bare"]) / g["bare"] * 100).dropna()
+            d = ((g[arm] - g[base_arm]) / g[base_arm] * 100).dropna()
             n = len(d)
             half = T95.get(n - 1, 1.96) * d.std(ddof=1) / math.sqrt(n) if n > 1 else math.nan
-            out.append({"level": level, "arm": arm, "repeats": n, "bare_wall_s": g["bare"].mean(),
+            out.append({"level": level, "arm": arm, "repeats": n, "base_wall_s": g[base_arm].mean(),
                         "arm_wall_s": g[arm].mean(), "overhead_pct": d.mean(), "ci95_half": half})
     # per-episode pairing: same task, seed and repeat in both arms
     eps = {}
-    for arm_dir in (p for p in root.iterdir() if p.is_dir() and p.name in ("full", "proxy_only", "bare")):
+    for arm_dir in (p for p in root.iterdir() if p.is_dir() and p.name in known):
         for cell in arm_dir.glob("N*_r*"):
             level, rep = cell.name[1:].split("_r")
             for k, w in cell_walls(cell).items():
                 eps.setdefault((int(level), int(rep), k), {})[arm_dir.name] = w
     for row in out:
-        lr = [math.log(v[row["arm"]] / v["bare"]) for (lvl, _, _), v in eps.items()
-              if lvl == row["level"] and row["arm"] in v and "bare" in v]
+        lr = [math.log(v[row["arm"]] / v[base_arm]) for (lvl, _, _), v in eps.items()
+              if lvl == row["level"] and row["arm"] in v and base_arm in v]
         n = len(lr)
         if n > 1:
             m = sum(lr) / n

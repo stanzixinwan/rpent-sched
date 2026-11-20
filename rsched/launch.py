@@ -368,6 +368,9 @@ def main(argv: list[str] | None = None) -> int:
     if traced:
         install(trace, episode, flash=_planner(argv) == "flash")
         _patch_finalization(trace, episode)
+    from rsched import artifacts
+    if artifacts.install():
+        trace.write({"type": "artifacts", "episode": episode, "t": now(), "mode": "lazy"})
 
     import rpent.cli.main as cli
 
@@ -383,6 +386,9 @@ def main(argv: list[str] | None = None) -> int:
         t1 = now()
         if traced:
             INTENT.finish()
+        from rsched import artifacts as _art
+        if _art.mode() == "lazy":
+            trace.write({"type": "artifacts_stats", "episode": episode, "t": now(), **_art.STATS})
         trace.write(
             {"type": "episode_end", "episode": episode, "t": t1, "elapsed_s": t1 - t0, "exit_code": code}
         )

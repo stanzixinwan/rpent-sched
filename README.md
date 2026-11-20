@@ -75,6 +75,7 @@ Configuration knobs used by the experiments:
 | `services.<name>.policy` | proxy policy: `passthrough`, `fifo`, `priority` (with aging), `batch` |
 | `services.<name>.proxy: false` | no proxy: episodes call the model server directly |
 | `RS_TRACE=off` (in `episode_env`) | run RPent without hooks (overhead control) |
+| `RS_ARTIFACTS=lazy` (in `episode_env`) | keep per-step images and depth maps in memory, write only those a tool reads (`rsched/artifacts.py`) |
 | `services.<name>.dump_per_episode` | the proxy saves the first request bodies of each episode (replayed by `rsched.bench_models`) |
 | `scheduling.mode` | request priority from the plan's or the history's remaining work |
 | `launch.rule`, `launch.estimate` | episode launch order (`given`, `lpt`, `jit_lpt`, ...) and its length estimate (`plan`, `history`, `hybrid`) |
@@ -123,6 +124,7 @@ sections refer to `paper/main.tex`.
 | X2 | concurrency × CPU budget (bottleneck migration, energy) | `cpu_scaling.yaml` | `run_cpu_scaling.sh` | `anatomy.py`, `gpu_util.py` | §5 |
 | X3 | sampling profile of episodes and simulators | `profile.yaml` | `run_profile.sh` | `profile_summary.py` | §4 |
 | X7 | real episodes with a local planner on the same GPU | `local_planner.yaml` | `launch_llm.sh`, then `python -m rsched.sweep` | `anatomy.py` | §6 |
+| X8 | cost of RPent's per-step artifact saving (store vs lazy) | `overhead.yaml` | `run_artifacts.sh` | `overhead.py --baseline store --arms lazy`, `anatomy.py` | §5 |
 
 Cross-experiment analysis: `analysis/bounds.py` (first-order bound vs. measured
 effect of each lever), `analysis/gpu_util.py` (GPU busy fraction, memory,
