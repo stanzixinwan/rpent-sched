@@ -75,6 +75,7 @@ Configuration knobs used by the experiments:
 | `services.<name>.policy` | proxy policy: `passthrough`, `fifo`, `priority` (with aging), `batch` |
 | `services.<name>.proxy: false` | no proxy: episodes call the model server directly |
 | `RS_TRACE=off` (in `episode_env`) | run RPent without hooks (overhead control) |
+| `MOLMO_REPLICAS=k` (env) / `backend: 'http://..:9002,http://..:9003'` | start k Molmo servers; a comma-separated backend makes the proxy hand each request to a free replica (set `max_inflight: k`) |
 | `RS_ARTIFACTS=lazy` (in `episode_env`) | keep per-step images and depth maps in memory, write only those a tool reads (`rsched/artifacts.py`) |
 | `services.<name>.dump_per_episode` | the proxy saves the first request bodies of each episode (replayed by `rsched.bench_models`) |
 | `scheduling.mode` | request priority from the plan's or the history's remaining work |
@@ -125,6 +126,7 @@ sections refer to `paper/main.tex`.
 | X3 | sampling profile of episodes and simulators | `profile.yaml` | `run_profile.sh` | `profile_summary.py` | §4 |
 | X7 | real episodes with a local planner on the same GPU | `local_planner.yaml` | `launch_llm.sh`, then `python -m rsched.sweep` | `anatomy.py` | §6 |
 | X8 | cost of RPent's per-step artifact saving (store vs lazy) | `overhead.yaml` | `run_artifacts.sh` | `overhead.py --baseline store --arms lazy`, `anatomy.py` | §5 |
+| X9 | Molmo's serial lock: one vs two Molmo replicas behind one proxy | `cpu_scaling.yaml` | `run_molmo_replicas.sh` | `launch_compare.py --baseline one`, `anatomy.py` | §7 |
 
 Cross-experiment analysis: `analysis/bounds.py` (first-order bound vs. measured
 effect of each lever), `analysis/gpu_util.py` (GPU busy fraction, memory,

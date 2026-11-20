@@ -8,7 +8,7 @@ tree() {  # a pid and all its descendants
   for c in $(ps -A -o pid=,ppid= | awk -v p="$1" '$2 == p {print $1}'); do tree "$c"; done
 }
 
-for name in vla sam3 molmo llm; do
+for name in vla sam3 molmo molmo2 molmo3 molmo4 llm; do
   pidfile="$SERVICE_DIR/$name.pid"
   if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
     # rsched.bench_phases may have left the planner frozen (SIGSTOP): thaw it so it can exit

@@ -208,12 +208,19 @@ class ProxyServer(ThreadingHTTPServer):
     ) -> None:
         super().__init__(listen, _ProxyHandler)
         self.dump = dump
-        parsed = urllib.parse.urlsplit(backend if "://" in backend else f"http://{backend}")
-        if parsed.scheme != "http":
-            raise ValueError("only http:// backends are supported (start services with --transport http)")
+        # Several comma-separated backends are replicas of one service: each gated
+        # request takes a free replica (pair with --max-inflight = replica count).
+        self.backends: list[tuple[str, int]] = []
+        for b in backend.split(","):
+            b = b.strip()
+            parsed = urllib.parse.urlsplit(b if "://" in b else f"http://{b}")
+            if parsed.scheme != "http":
+                raise ValueError("only http:// backends are supported (start services with --transport http)")
+            self.backends.append((parsed.hostname or "127.0.0.1", parsed.port or 80))
         self.name = name
-        self.backend_host = parsed.hostname or "127.0.0.1"
-        self.backend_port = parsed.port or 80
+        self.backend_host, self.backend_port = self.backends[0]
+        self._free = list(range(len(self.backends)))
+        self._free_cv = threading.Condition()
         self.gate = gate
         self.gate_methods = gate_methods
         self.log = log
@@ -223,10 +230,22 @@ class ProxyServer(ThreadingHTTPServer):
             self.batcher = Batcher(lambda body: self.forward("/call", body, "application/json")[1],
                                    **(batcher_args or {}))
 
-    def forward(self, path: str, body: bytes, content_type: str) -> tuple[int, bytes, str]:
-        conn = http.client.HTTPConnection(
-            self.backend_host, self.backend_port, timeout=self.backend_timeout_s
-        )
+    def take_replica(self) -> int:
+        """Index of a free replica (blocks while all are busy)."""
+        with self._free_cv:
+            while not self._free:
+                self._free_cv.wait()
+            return self._free.pop(0)
+
+    def give_replica(self, i: int) -> None:
+        with self._free_cv:
+            self._free.append(i)
+            self._free_cv.notify()
+
+    def forward(self, path: str, body: bytes, content_type: str,
+                replica: int | None = None) -> tuple[int, bytes, str]:
+        host, port = self.backends[replica or 0]
+        conn = http.client.HTTPConnection(host, port, timeout=self.backend_timeout_s)
         try:
             conn.request("POST", path, body=body, headers={"Content-Type": content_type})
             resp = conn.getresponse()
@@ -292,13 +311,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             t_dispatch = ticket.t_dispatch or now()
 
         status, resp_body, resp_type, error = 502, b"", "application/json", None
+        replica = srv.take_replica() if gated and len(srv.backends) > 1 else None
         try:
-            status, resp_body, resp_type = srv.forward(self.path, body, content_type)
+            status, resp_body, resp_type = srv.forward(self.path, body, content_type, replica)
         except Exception as exc:  # backend down or timed out
             error = f"{type(exc).__name__}: {exc}"
             resp_body = json.dumps({"ok": False, "error": f"rsched proxy: {error}"}).encode()
             status = 200  # RPent clients read failures from the body, like the real server
         finally:
+            if replica is not None:
+                srv.give_replica(replica)
             if gated:
                 srv.gate.release()
         t_done = now()
@@ -329,6 +351,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     "http_status": status,
                     "ok": _peek_ok(resp_body) if error is None else False,
                     "error": error,
+                    "replica": replica,
                 }
             )
 
@@ -383,7 +406,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--name", required=True, help="service label written to the log, e.g. vla")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--listen", type=int, required=True, help="port clients connect to")
-    p.add_argument("--backend", required=True, help="real service, e.g. http://127.0.0.1:9000")
+    p.add_argument("--backend", required=True,
+                   help="real service, e.g. http://127.0.0.1:9000; comma-separated for replicas")
     p.add_argument("--policy", choices=POLICIES, default="fifo")
     p.add_argument("--max-inflight", type=int, default=1)
     p.add_argument("--aging", type=float, default=0.0, help="priority credit per second waited")

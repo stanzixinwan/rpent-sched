@@ -67,7 +67,10 @@ if [[ "${1:-}" == "status" ]]; then
   healthz "$VLA_PORT" && log "vla  :$VLA_PORT ok" || log "vla  :$VLA_PORT DOWN"
   healthz "$SAM3_PORT" && log "sam3 :$SAM3_PORT ok" || log "sam3 :$SAM3_PORT DOWN"
   if [[ -n "${MOLMO_CHECKPOINT_PATH:-}" ]]; then
-    healthz "$MOLMO_PORT" && log "molmo :$MOLMO_PORT ok" || log "molmo :$MOLMO_PORT DOWN"
+    for (( i = 0; i < ${MOLMO_REPLICAS:-1}; i++ )); do
+      p=$(( MOLMO_PORT + i ))
+      healthz "$p" && log "molmo :$p ok" || log "molmo :$p DOWN"
+    done
   else
     log "molmo skipped (MOLMO_CHECKPOINT_PATH unset)"
   fi
@@ -111,13 +114,19 @@ if [[ -n "${MOLMO_CHECKPOINT_PATH:-}" ]]; then
   uv pip install --python .venv-molmo/bin/python -e 'third_party/RPent[molmo]' 'transformers==4.57.1' einops accelerate"
   fi
   # Own process env: the LIBERO venv's transformers cannot import this server.
-  start molmo "$MOLMO_PORT" env \
-    PYTHONPATH="$RS_ROOT:$RS_ROOT/third_party/RPent" \
-    MOLMO_CHECKPOINT_PATH="$MOLMO_CHECKPOINT_PATH" \
-    "$molmo_py" -m rsched.molmo_server \
-    --cuda-device "$CUDA_DEVICE" \
-    --transport http --host 127.0.0.1 --port "$MOLMO_PORT"
-  wait_ready molmo "$MOLMO_PORT" 900
+  # MOLMO_REPLICAS=k starts k servers on MOLMO_PORT, MOLMO_PORT+1, ... (named
+  # molmo, molmo2, ...); a sweep lists them as one comma-separated backend.
+  for (( i = 1; i <= ${MOLMO_REPLICAS:-1}; i++ )); do
+    name=molmo; (( i > 1 )) && name="molmo$i"
+    port=$(( MOLMO_PORT + i - 1 ))
+    start "$name" "$port" env \
+      PYTHONPATH="$RS_ROOT:$RS_ROOT/third_party/RPent" \
+      MOLMO_CHECKPOINT_PATH="$MOLMO_CHECKPOINT_PATH" \
+      "$molmo_py" -m rsched.molmo_server \
+      --cuda-device "$CUDA_DEVICE" \
+      --transport http --host 127.0.0.1 --port "$port"
+    wait_ready "$name" "$port" 900
+  done
 else
   log "molmo skipped (set MOLMO_CHECKPOINT_PATH for a Flash sweep)"
 fi
