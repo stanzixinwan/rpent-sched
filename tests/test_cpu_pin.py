@@ -145,3 +145,11 @@ def test_rs_pin_env_pins_episodes(tmp_path):
     assert seen == [cpu]
     manifest = json.load(open(out / "N1_r0" / "manifest.json"))
     assert manifest["episode_cpus"] == [cpu] and manifest["infra_cpus"] == str(cpu)
+
+
+def test_port_blocks_are_disjoint():
+    from rsched.sweep import PORT_BASE, PORT_BLOCK, PORT_SLOTS
+
+    starts = [PORT_BASE + (i % PORT_SLOTS) * PORT_BLOCK for i in range(64)]
+    assert len(set(starts)) == 64
+    assert PORT_BASE + PORT_SLOTS * PORT_BLOCK <= 32768

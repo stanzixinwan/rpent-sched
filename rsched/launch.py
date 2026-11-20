@@ -354,6 +354,39 @@ def _planner(argv: list[str]) -> str | None:
         return None
 
 
+def _patch_ports() -> None:
+    """RS_PORT_BASE (set per episode by rsched.sweep): take env_server and other
+    daemon ports from this episode's own block instead of RPent's bind-and-release
+    pick, which two episodes starting together can both get."""
+    base = os.environ.get("RS_PORT_BASE")
+    if not base:
+        return
+    import socket
+
+    try:
+        import robots.libero.robot_spec as spec
+    except ImportError:  # another robot: keep RPent's picker
+        return
+
+    ports = itertools.count(int(base))
+    limit = int(base) + 8
+
+    def pick(host: str = "127.0.0.1") -> int:
+        for port in ports:
+            if port >= limit:
+                break
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind((host, port))
+                except OSError:
+                    continue
+            return port
+        return orig(host)
+
+    orig = spec.pick_free_port
+    spec.pick_free_port = pick
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     episode = os.environ.get("RS_EPISODE_ID") or f"ep-{uuid.uuid4().hex[:8]}"
@@ -368,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
     if traced:
         install(trace, episode, flash=_planner(argv) == "flash")
         _patch_finalization(trace, episode)
+    _patch_ports()
     from rsched import artifacts
     if artifacts.install():
         trace.write({"type": "artifacts", "episode": episode, "t": now(), "mode": "lazy"})

@@ -122,6 +122,9 @@ def preflight_planner(cfg: dict) -> None:
                  "Skip with --skip-preflight.")
 
 
+PORT_BASE, PORT_BLOCK, PORT_SLOTS = 20000, 8, 1024  # 20000-28191, below Linux's ephemeral 32768+
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -549,7 +552,10 @@ class Level:
             env = {k: str(v) for k, v in (self.cfg.get("episode_env") or {}).items()}
             env.update({"RS_EPISODE_ID": spec.episode_id, "RS_TRACE_DIR": str(self.out / "traces"),
                         "RS_SCHED": sched["mode"], "RS_COSTS": json.dumps(sched["costs"]),
-                        "RS_HISTORY_FILE": str(self.out / "history.jsonl")})
+                        "RS_HISTORY_FILE": str(self.out / "history.jsonl"),
+                        # a port block per episode below the ephemeral range: RPent picks
+                        # env_server ports by bind-and-release, which races at N>=32
+                        "RS_PORT_BASE": str(PORT_BASE + (len(launched) % PORT_SLOTS) * PORT_BLOCK)})
             p = self._spawn(f"episode_{spec.episode_id}", self.episode_cmd(spec, endpoints), env,
                             cpus=self.episode_cpus)
             running[spec.episode_id] = (p, time.time())
