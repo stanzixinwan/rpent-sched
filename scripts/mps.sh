@@ -30,7 +30,11 @@ case "${1:-status}" in
       fi
     done
     mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
-    CUDA_VISIBLE_DEVICES="$CUDA_DEVICE" nvidia-cuda-mps-control -d || die "MPS daemon failed to start"
+    # The daemon sees every GPU: RPent's env_server clears CUDA_VISIBLE_DEVICES and
+    # picks its GPU by index, and on a multi-GPU host a daemon limited to one GPU
+    # makes that client fail to initialise CUDA. Work still goes to CUDA_DEVICE
+    # (every service passes --cuda-device), so the other GPUs stay idle.
+    nvidia-cuda-mps-control -d || die "MPS daemon failed to start"
     sleep 1
     mps_up || die "MPS daemon not answering; see $CUDA_MPS_LOG_DIRECTORY/control.log"
     # a CUDA client must connect for the server to come up; fail now, not in the services
