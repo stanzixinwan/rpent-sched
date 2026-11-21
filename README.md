@@ -129,8 +129,12 @@ sections refer to `paper/main.tex`.
 | X9 | Molmo's serial lock: one vs two Molmo replicas behind one proxy | `cpu_scaling.yaml` | `run_molmo_replicas.sh` | `launch_compare.py --baseline one`, `anatomy.py` | §7 |
 | X10 | lever composition: Molmo replicas x VLA batching (2x2) | `cpu_scaling.yaml` | `X9_ARMS="one one_batch two two_batch" X9_LEVELS="16 32" run_molmo_replicas.sh` | `launch_compare.py --baseline one`, `anatomy.py` | §7 |
 
-Cross-experiment analysis: `analysis/bounds.py` (first-order bound vs. measured
-effect of each lever), `analysis/gpu_util.py` (GPU busy fraction, memory,
+Cross-experiment analysis: `analysis/collect_unified.py` (every result from the
+unified platform into `results/paper/unified/`: model profile, scaling, each
+lever paired by repeat and by episode with its first-order bound, per-part
+seconds per episode, co-location, tracing cost; run `anatomy.py` per experiment
+first), `analysis/bounds.py` (first-order bound vs. measured
+effect of each lever, older multi-platform data), `analysis/gpu_util.py` (GPU busy fraction, memory,
 energy per episode). Figures: `python paper/figures/make_figures.py`.
 
 The co-location experiments (B1, B2, X7) serve a local VLM planner with vLLM
