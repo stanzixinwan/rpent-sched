@@ -17,6 +17,10 @@
 # "_batch" = greedy cross-episode VLA batching (max 16, as G6). When any arm
 # batches, every arm's VLA goes through the batching proxy path (max_batch 1
 # for the others, as G6's nobatch), so only the batch size differs.
+#
+# Core ladder (X11): X9_BUDGETS="18 24 32 44" runs every arm at each episode-vCPU
+# budget (services stay on X9_SERVICE_CORES=8); arm directories become
+# <arm>_c<budget>. X9_SKIP="c18:48 c24:48" skips budget:level pairs.
 # Afterwards:
 #   python analysis/launch_compare.py results/molmo_replicas/<stamp> --baseline one
 #   python analysis/anatomy.py --set one_N16="<root>/one/N16_r*" ... --out <root>/anatomy
@@ -28,7 +32,24 @@ ROOT="$RS_ROOT/results/molmo_replicas/$STAMP"
 read -r -a ARMS <<<"${X9_ARMS:-one two}"
 read -r -a LEVELS <<<"${X9_LEVELS:-8 16 32}"
 REPEATS="${X9_REPEATS:-3}"
+read -r -a BUDGETS <<<"${X9_BUDGETS:-}"
+SKIP=" ${X9_SKIP:-} "
 mkdir -p "$ROOT/configs"
+
+EPS_ARGS=()
+if (( ${#BUDGETS[@]} )); then
+  SVC="${X9_SERVICE_CORES:-8}"
+  max_budget=0; for b in "${BUDGETS[@]}"; do (( b > max_budget )) && max_budget=$b; done
+  # services, proxies and the sampler on a fixed set; episodes get --episode-cpus per cell
+  eval "export $(python -m rsched.cpu_layout --service-cores "$SVC" --episode-cores "$max_budget" --shell)"
+  export RS_PIN=1
+  episode_cpus() { python -m rsched.cpu_layout --service-cores "$SVC" --episode-cores "$1" --episodes-only; }
+  { echo "service CPUs: $SERVICE_CPUS"; for b in "${BUDGETS[@]}"; do echo "episode CPUs c$b: $(episode_cpus "$b")"; done; } \
+    | tee "$ROOT/cpu_layout.txt"
+  EPS_ARGS=(--episode-cpus "$(episode_cpus "$max_budget")")
+else
+  BUDGETS=("")
+fi
 
 export MOLMO_REPLICAS=2
 bash scripts/stop_services.sh
@@ -61,22 +82,28 @@ PY
 
 if [[ ! -f "$ROOT/warmup/N8_r0/manifest.json" ]]; then
   log "warm-up: 8 episodes on two replicas"
-  python -m rsched.sweep "$ROOT/configs/${ARMS[-1]}.yaml" --levels 8 --repeats 1 --episodes 8 --out "$ROOT/warmup"
+  python -m rsched.sweep "$ROOT/configs/${ARMS[-1]}.yaml" --levels 8 --repeats 1 --episodes 8 --out "$ROOT/warmup" \
+    "${EPS_ARGS[@]}"
   rm -rf "$ROOT/warmup/N8_r0/episodes"
 fi
 
-n=${#ARMS[@]}; total=$(( n * REPEATS * ${#LEVELS[@]} )); k=0
+# every (arm, budget) pair is one "unit"; units rotate order across repeats
+UNITS=(); for a in "${ARMS[@]}"; do for b in "${BUDGETS[@]}"; do UNITS+=("$a:$b"); done; done
+n=${#UNITS[@]}; total=$(( n * REPEATS * ${#LEVELS[@]} )); k=0
 for (( r = 0; r < REPEATS; r++ )); do
   for level in "${LEVELS[@]}"; do
     for (( i = 0; i < n; i++ )); do
-      arm="${ARMS[$(( (i + r) % n ))]}"
+      unit="${UNITS[$(( (i + r) % n ))]}"; arm="${unit%%:*}"; budget="${unit#*:}"
+      dir="$arm${budget:+_c$budget}"
       k=$(( k + 1 ))
-      cell="$ROOT/$arm/N${level}_r${r}"
-      if [[ -f "$cell/manifest.json" ]]; then log "[$k/$total] skip $arm N=$level r=$r (done)"; continue; fi
+      cell="$ROOT/$dir/N${level}_r${r}"
+      if [[ -n "$budget" && "$SKIP" == *" c$budget:$level "* ]]; then log "[$k/$total] skip $dir N=$level (X9_SKIP)"; continue; fi
+      if [[ -f "$cell/manifest.json" ]]; then log "[$k/$total] skip $dir N=$level r=$r (done)"; continue; fi
       [[ -d "$cell" ]] && mv "$cell" "$cell.partial-$(date +%H%M%S)"
-      log "[$k/$total] $arm N=$level r=$r"
+      cpus=(); [[ -n "$budget" ]] && cpus=(--episode-cpus "$(episode_cpus "$budget")")
+      log "[$k/$total] $dir N=$level r=$r"
       python -m rsched.sweep "$ROOT/configs/$arm.yaml" --levels "$level" --repeats 1 --repeat-index "$r" \
-        --out "$ROOT/$arm"
+        "${cpus[@]}" --out "$ROOT/$dir"
       rm -rf "$cell/episodes"   # not analysed; fills the disk
     done
   done
