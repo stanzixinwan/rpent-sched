@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -86,9 +87,11 @@ def main(argv: list[str] | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     rows = []
-    for rule_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name not in ("analysis", "warmup", "record", "configs")):
+    skip = ("analysis", "warmup", "record", "configs", "anatomy")
+    for rule_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name not in skip and not p.name.startswith("_")):
         for cell in sorted(rule_dir.iterdir()):
-            if (cell / "manifest.json").exists() and ".partial-" not in cell.name:
+            # only N<level>_r<repeat>; aborted or partial copies carry a suffix
+            if (cell / "manifest.json").exists() and re.fullmatch(r"N\d+_r\d+", cell.name):
                 rows.append(cell_row(rule_dir.name, cell))
     if not rows:
         sys.exit(f"no <rule>/N<level>_r<repeat>/manifest.json under {root}")
