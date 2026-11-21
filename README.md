@@ -127,6 +127,7 @@ sections refer to `paper/main.tex`.
 | X7 | real episodes with a local planner on the same GPU | `local_planner.yaml` | `launch_llm.sh`, then `python -m rsched.sweep` | `anatomy.py` | §6 |
 | X8 | cost of RPent's per-step artifact saving (store vs lazy) | `overhead.yaml` | `run_artifacts.sh` | `overhead.py --baseline store --arms lazy`, `anatomy.py` | §5 |
 | X9 | Molmo's serial lock: one vs two Molmo replicas behind one proxy | `cpu_scaling.yaml` | `run_molmo_replicas.sh` | `launch_compare.py --baseline one`, `anatomy.py` | §7 |
+| X10 | lever composition: Molmo replicas x VLA batching (2x2) | `cpu_scaling.yaml` | `X9_ARMS="one one_batch two two_batch" X9_LEVELS="16 32" run_molmo_replicas.sh` | `launch_compare.py --baseline one`, `anatomy.py` | §7 |
 
 Cross-experiment analysis: `analysis/bounds.py` (first-order bound vs. measured
 effect of each lever), `analysis/gpu_util.py` (GPU busy fraction, memory,

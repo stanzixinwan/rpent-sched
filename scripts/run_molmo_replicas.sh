@@ -12,6 +12,11 @@
 # launch order shared by both arms at a repeat), MPS, X9_LEVELS (8 16 32),
 # X9_REPEATS (3), arm order rotating. Restarts the services with two Molmo
 # replicas under MPS.
+#
+# 2x2 with VLA batching (X10): X9_ARMS="one one_batch two two_batch" X9_LEVELS="16 32".
+# "_batch" = greedy cross-episode VLA batching (max 16, as G6). When any arm
+# batches, every arm's VLA goes through the batching proxy path (max_batch 1
+# for the others, as G6's nobatch), so only the batch size differs.
 # Afterwards:
 #   python analysis/launch_compare.py results/molmo_replicas/<stamp> --baseline one
 #   python analysis/anatomy.py --set one_N16="<root>/one/N16_r*" ... --out <root>/anatomy
@@ -20,7 +25,7 @@ source "$(dirname "$0")/common.sh"
 
 STAMP="${1:-$(date +%Y%m%d-%H%M%S)}"
 ROOT="$RS_ROOT/results/molmo_replicas/$STAMP"
-ARMS=(one two)
+read -r -a ARMS <<<"${X9_ARMS:-one two}"
 read -r -a LEVELS <<<"${X9_LEVELS:-8 16 32}"
 REPEATS="${X9_REPEATS:-3}"
 mkdir -p "$ROOT/configs"
@@ -33,23 +38,30 @@ bash scripts/launch_services.sh status
 bash scripts/record_platform.sh "$ROOT"
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader >"$ROOT/gpu_memory.txt"
 
-python - "$ROOT/configs" "$MOLMO_PORT" <<'PY'
+python - "$ROOT/configs" "$MOLMO_PORT" "${ARMS[@]}" <<'PY'
 import copy, sys, yaml
-out, port = sys.argv[1], int(sys.argv[2])
+out, port, arms = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
 base = yaml.safe_load(open("configs/cpu_scaling.yaml"))
 base.pop("cpu", None)  # RS_PIN layout from env/.env (18 episode vCPUs)
-for arm, k in (("one", 1), ("two", 2)):
+any_batch = any(a.endswith("_batch") for a in arms)
+for arm in arms:
+    k = {"one": 1, "two": 2}[arm.split("_")[0]]
     cfg = copy.deepcopy(base)
     cfg["name"] = f"x9_molmo_{arm}"
     cfg["services"]["molmo"] = {
         "backend": ",".join(f"http://127.0.0.1:{port + i}" for i in range(k)),
         "policy": "fifo", "max_inflight": k}
+    if any_batch:
+        cfg["services"]["vla"] = {
+            "backend": "http://127.0.0.1:9000", "policy": "batch",
+            "max_batch": 16 if arm.endswith("_batch") else 1,
+            "batch_mode": "greedy", "batch_window_ms": 0, "batch_intent": False}
     yaml.safe_dump(cfg, open(f"{out}/{arm}.yaml", "w"), sort_keys=False)
 PY
 
 if [[ ! -f "$ROOT/warmup/N8_r0/manifest.json" ]]; then
   log "warm-up: 8 episodes on two replicas"
-  python -m rsched.sweep "$ROOT/configs/two.yaml" --levels 8 --repeats 1 --episodes 8 --out "$ROOT/warmup"
+  python -m rsched.sweep "$ROOT/configs/${ARMS[-1]}.yaml" --levels 8 --repeats 1 --episodes 8 --out "$ROOT/warmup"
   rm -rf "$ROOT/warmup/N8_r0/episodes"
 fi
 
@@ -69,4 +81,4 @@ for (( r = 0; r < REPEATS; r++ )); do
     done
   done
 done
-log "X9 done: python analysis/launch_compare.py $ROOT --baseline one"
+log "done: python analysis/launch_compare.py $ROOT --baseline ${ARMS[0]}"
