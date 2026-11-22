@@ -32,3 +32,5 @@ paper/*.blg
 paper/*.fls
 paper/*.fdb_latexmk
 paper/*.out
+.thor-home/
+.thor-overrides.txt
