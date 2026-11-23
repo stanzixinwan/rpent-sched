@@ -197,7 +197,7 @@ def service_tables(root: Path, svc: str, peak_tflops: float, peak_gbps: float) -
     if (d / "client.csv").exists():
         cl = pd.read_csv(d / "client.csv").assign(service=svc)
         keep = [c for c in ("service", "phase", "batch", "calls", "items", "lat_p50_ms", "lat_p95_ms",
-                            "items_per_s", "power_mean_W", "idle_power_W", "J_per_item_gross",
+                            "items_per_s", "power_mean_W", "power_gpu_mean_W", "idle_power_W", "J_per_item_gross",
                             "J_per_item_net", "energy_source") if c in cl]
         out["energy"] = cl[cl["phase"].isin(["idle", "timing"])][keep]
         b = cl[cl["phase"].astype(str).str.startswith("batch_")][keep]

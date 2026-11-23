@@ -24,6 +24,7 @@ same time. Outputs in --out: client.csv (one row per phase), calls.jsonl.
 from __future__ import annotations
 
 import argparse
+import os
 import http.client
 import itertools
 import json
@@ -37,8 +38,61 @@ from pathlib import Path
 from rsched.traceio import JsonlWriter
 
 
+class TegraEnergy:
+    """Jetson (RS_GPU_SAMPLER=tegra): board input power and the GPU rail from tegrastats.
+
+    power_mean_W is the board's input power (VIN), which includes CPU, memory and
+    idle draw; the GPU rail alone is reported as power_gpu_mean_W.
+    """
+
+    counter = False
+
+    def __init__(self, interval_s: float = 0.1) -> None:
+        self.interval_ms = max(int(interval_s * 1000), 10)
+
+    def power_w(self) -> float | None:
+        return None
+
+    def start(self) -> None:
+        import subprocess
+
+        from rsched.tegra import parse
+
+        self.t0 = time.time()
+        self.board: list[float] = []
+        self.gpu: list[float] = []
+        self.proc = subprocess.Popen(["tegrastats", "--interval", str(self.interval_ms)],
+                                     stdout=subprocess.PIPE, text=True, bufsize=1)
+
+        def loop():
+            for line in self.proc.stdout:
+                r = parse(line)
+                if r and r["power_w"] is not None:
+                    self.board.append(r["power_w"])
+                    if "VDD_GPU" in r["rails"]:
+                        self.gpu.append(r["rails"]["VDD_GPU"])
+
+        self.thread = threading.Thread(target=loop, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> dict:
+        self.proc.terminate()
+        self.thread.join(timeout=2)
+        dt = time.time() - self.t0
+        mean_w = statistics.fmean(self.board) if self.board else None
+        gpu_w = statistics.fmean(self.gpu) if self.gpu else None
+        return {"seconds": dt, "energy_J": mean_w * dt if mean_w is not None else None,
+                "power_mean_W": mean_w, "power_gpu_mean_W": gpu_w,
+                "energy_source": "tegrastats_board" if mean_w is not None else "none"}
+
+
 class Energy:
     """GPU energy over an interval: NVML counter if present, else sampled power."""
+
+    def __new__(cls, gpu: int = 0, interval_s: float = 0.05):
+        if os.environ.get("RS_GPU_SAMPLER") == "tegra":
+            return TegraEnergy()
+        return super().__new__(cls)
 
     def __init__(self, gpu: int, interval_s: float = 0.05) -> None:
         self.nvml = None
