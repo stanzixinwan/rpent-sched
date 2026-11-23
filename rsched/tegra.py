@@ -11,8 +11,10 @@ so analysis/gpu_util.py reads them unchanged:
             the board does not report VIN), in watts
   rails     every power rail tegrastats prints, in watts (VDD_GPU, VDD_CPU_SOC_MSS, ...)
   used_mb   RAM in use (CPU and GPU share it on Jetson)
-  util_gpu  GPU load in percent: tegrastats GR3D_FREQ when printed, otherwise
-            the devfreq/GPU ``load`` file (permille) when one is readable, else None
+  util_gpu  GPU load in percent: tegrastats GR3D_FREQ when printed (Orin), else
+            the GPU ``load`` file (permille) when one is readable, else NVML's
+            utilization (Thor: nvidia-smi shows GPU-Util though memory is N/A), else None
+  gpu_mhz   current GPU clock from devfreq, when readable
   cpu_util  per-core CPU load in percent
 """
 
@@ -47,7 +49,32 @@ def find_load_file() -> str | None:
     return None
 
 
-def parse(line: str, load_file: str | None = None) -> dict | None:
+def nvml_util():
+    """A callable returning NVML GPU utilization (percent), or None if NVML cannot."""
+    try:
+        import pynvml
+
+        pynvml.nvmlInit()
+        h = pynvml.nvmlDeviceGetHandleByIndex(0)
+        pynvml.nvmlDeviceGetUtilizationRates(h)
+    except Exception:
+        return None
+    return lambda: float(pynvml.nvmlDeviceGetUtilizationRates(h).gpu)
+
+
+FREQ_FILES = sorted(glob.glob("/sys/class/devfreq/gpu-gpc-*/cur_freq"))
+
+
+def gpu_mhz() -> float | None:
+    for f in FREQ_FILES:
+        try:
+            return int(open(f).read().strip()) / 1e6
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def parse(line: str, load_file: str | None = None, util_fn=None) -> dict | None:
     m = RAM.search(line)
     if not m:
         return None
@@ -64,6 +91,11 @@ def parse(line: str, load_file: str | None = None) -> dict | None:
             util = int(open(load_file).read().strip()) / 10.0
         except (OSError, ValueError):
             util = None
+    elif util_fn is not None:
+        try:
+            util = util_fn()
+        except Exception:
+            util = None
     cpu = []
     c = CPU.search(line)
     if c:
@@ -72,7 +104,7 @@ def parse(line: str, load_file: str | None = None) -> dict | None:
             cpu.append(float(pct) if pct.replace(".", "", 1).isdigit() else None)
     return {"type": "gpu", "gpu": 0, "used_mb": float(m.group(1)), "total_mb": float(m.group(2)),
             "util_gpu": util, "util_mem": None, "power_w": power, "rails": rails, "cpu_util": cpu,
-            "procs": []}
+            "gpu_mhz": gpu_mhz(), "procs": []}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -81,8 +113,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--log", required=True)
     args = p.parse_args(argv)
     load_file = find_load_file()
+    util_fn = None if load_file else nvml_util()
     log = JsonlWriter(args.log)
-    log.write({"type": "sampler", "t": now(), "kind": "tegrastats", "gpu_load_file": load_file})
+    log.write({"type": "sampler", "t": now(), "kind": "tegrastats", "gpu_load_file": load_file,
+               "gpu_util_source": "gr3d/load" if load_file else ("nvml" if util_fn else None)})
     proc = subprocess.Popen(["tegrastats", "--interval", str(int(args.interval * 1000))],
                             stdout=subprocess.PIPE, text=True, bufsize=1)
     stop = threading.Event()
@@ -91,7 +125,7 @@ def main(argv: list[str] | None = None) -> None:
 
     def reader():
         for line in proc.stdout:
-            rec = parse(line, load_file)
+            rec = parse(line, load_file, util_fn)
             if rec is not None:
                 log.write({**rec, "t": now()})
             if stop.is_set():
