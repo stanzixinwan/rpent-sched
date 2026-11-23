@@ -47,6 +47,23 @@ starts the services). Without a GPU: `bash env/setup.sh --no-gpu && uv pip
 install -e third_party/RPent`, then `bash scripts/smoke_test.sh`. Tests:
 `pytest tests` (CPU only; RPent's RPC classes against fake services).
 
+**Jetson Thor** (JetPack 7, aarch64, sm_110): everything runs in NVIDIA's PyTorch
+container, since pip builds of PyTorch have no sm_110 kernels.
+
+```bash
+sudo docker build -t rpent-thor env/thor
+bash env/thor/run.sh               # shell in the container, repo mounted at the same path
+bash env/thor/setup.sh             # inside: venvs on the container's torch, checkpoints, env/.env
+```
+
+`setup.sh` sets two Jetson-specific knobs in `env/.env`: `RS_DISABLE_CUDNN=1`
+(the container's cuDNN segfaults on Thor in Pi0.5's patch-embedding convolution;
+PyTorch's own kernels are used instead) and `RS_GPU_SAMPLER=tegra` (NVML reports
+neither memory nor power on Jetson; `rsched/tegra.py` samples board and rail power
+from `tegrastats` and GPU load from NVML). On a multi-GPU host do not set
+`CUDA_VISIBLE_DEVICES`; select the GPU with `CUDA_DEVICE` (RPent's env_server clears
+the variable and picks its GPU by index).
+
 ## Running an experiment
 
 ```bash
@@ -128,6 +145,7 @@ sections refer to `paper/main.tex`.
 | X8 | cost of RPent's per-step artifact saving (store vs lazy) | `overhead.yaml` | `run_artifacts.sh` | `overhead.py --baseline store --arms lazy`, `anatomy.py` | §5 |
 | X9 | Molmo's serial lock: one vs two Molmo replicas behind one proxy | `cpu_scaling.yaml` | `run_molmo_replicas.sh` | `launch_compare.py --baseline one`, `anatomy.py` | §7 |
 | X10 | lever composition: Molmo replicas x VLA batching (2x2) | `cpu_scaling.yaml` | `X9_ARMS="one one_batch two two_batch" X9_LEVELS="16 32" run_molmo_replicas.sh` | `launch_compare.py --baseline one`, `anatomy.py` | §7 |
+| X11 | episode-vCPU ladder for X10's baseline and combined arms | `cpu_scaling.yaml` | `X9_ARMS="one two_batch" X9_BUDGETS="18 24 32 44" run_molmo_replicas.sh` | `anatomy.py` | §6 |
 
 Cross-experiment analysis: `analysis/collect_unified.py` (every result from the
 unified platform into `results/paper/unified/`: model profile, scaling, each

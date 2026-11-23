@@ -34,3 +34,4 @@ paper/*.fdb_latexmk
 paper/*.out
 .thor-home/
 .thor-overrides.txt
+rpent-sched/
