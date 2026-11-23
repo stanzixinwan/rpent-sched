@@ -36,8 +36,9 @@ LOAD_FILES = ["/sys/devices/platform/gpu.0/load", "/sys/devices/gpu.0/load",
 
 
 def find_load_file() -> str | None:
-    for path in LOAD_FILES + sorted(glob.glob("/sys/class/devfreq/*gpu*/device/load")) \
-            + sorted(glob.glob("/sys/devices/platform/**/gpu*/load", recursive=True)):
+    # no recursive walk of /sys: it is huge and full of symlink loops
+    for path in LOAD_FILES + sorted(glob.glob("/sys/class/devfreq/gpu*/device/load")) \
+            + sorted(glob.glob("/sys/class/devfreq/gpu*/load")):
         try:
             int(open(path).read().strip())
             return path
