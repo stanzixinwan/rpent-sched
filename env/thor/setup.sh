@@ -53,22 +53,14 @@ add SERVICE_THREADS 2
 add CUDA_DEVICE 0
 
 # cuDNN 9.28 in this container segfaults on Thor in Pi0.5's first conv (SigLIP
-# patch embedding, fp32 and bf16 alike); PyTorch's own conv kernels work. A
-# sitecustomize in both venvs turns cuDNN off when RS_DISABLE_CUDNN=1 (env/.env).
-# (sitecustomize, not a .pth: a venv's .pth runs before the container's
-# site-packages, where torch lives, are on sys.path.)
+# patch embedding, fp32 and bf16 alike); PyTorch's own conv kernels work.
+# env/thor/rs_thor_cudnn.py (loaded by a .pth in both venvs) turns cuDNN off as
+# torch loads it when RS_DISABLE_CUDNN=1 (env/.env).
 for v in .venv .venv-molmo; do
   sp=$($v/bin/python -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
-  rm -f "$sp/rs_thor_cudnn.pth"
-  cat > "$sp/sitecustomize.py" <<'PY'
-import os
-if os.environ.get("RS_DISABLE_CUDNN") == "1":
-    try:
-        import torch
-        torch.backends.cudnn.enabled = False
-    except ImportError:
-        pass
-PY
+  rm -f "$sp/sitecustomize.py"
+  cp env/thor/rs_thor_cudnn.py "$sp/rs_thor_cudnn.py"
+  echo "import rs_thor_cudnn" > "$sp/rs_thor_cudnn.pth"
 done
 add RS_DISABLE_CUDNN 1
 RS_DISABLE_CUDNN=1 .venv/bin/python -c "import torch; assert not torch.backends.cudnn.enabled; c=torch.nn.Conv2d(3,8,14,stride=14).cuda(); c(torch.randn(1,3,224,224,device='cuda')); torch.cuda.synchronize(); print('conv ok without cuDNN')"
