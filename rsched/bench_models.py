@@ -46,6 +46,8 @@ class TegraEnergy:
     """
 
     counter = False
+    nvml = None
+    source = "tegrastats (board input power)"
 
     def __init__(self, interval_s: float = 0.1) -> None:
         self.interval_ms = max(int(interval_s * 1000), 10)
@@ -265,7 +267,7 @@ def main(argv: list[str] | None = None) -> None:
     calls_log = JsonlWriter(out / "calls.jsonl")
     client.rpc("healthz")
     print(f"[{args.service}] {len(bodies)} recorded requests; energy from "
-          f"{'NVML counter' if energy.counter else 'sampled power' if energy.nvml else 'nowhere (no NVML)'}",
+          f"{getattr(energy, 'source', None) or ('NVML counter' if energy.counter else 'sampled power' if energy.nvml else 'nowhere (no NVML)')}",
           flush=True)
 
     rows = []
