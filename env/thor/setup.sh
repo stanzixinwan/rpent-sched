@@ -63,5 +63,6 @@ for v in .venv .venv-molmo; do
   echo "import rs_thor_cudnn" > "$sp/rs_thor_cudnn.pth"
 done
 add RS_DISABLE_CUDNN 1
+add RS_GPU_SAMPLER tegra
 RS_DISABLE_CUDNN=1 .venv/bin/python -c "import torch; assert not torch.backends.cudnn.enabled; c=torch.nn.Conv2d(3,8,14,stride=14).cuda(); c(torch.randn(1,3,224,224,device='cuda')); torch.cuda.synchronize(); print('conv ok without cuDNN')"
 log "done. Check: python -m pytest tests -q; bash scripts/launch_services.sh"

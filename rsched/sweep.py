@@ -478,7 +478,9 @@ class Level:
             self.procs.append(self._spawn(f"proxy_{svc}", cmd, cpus=self.infra_cpus))
             endpoints[svc] = f"http://127.0.0.1:{port}"
         if self.cfg.get("gpu_sampler", True):
-            cmd = [sys.executable, "-m", "rsched.nvml", "--interval",
+            # Jetson: NVML is not supported; rsched.tegra reads tegrastats and sysfs
+            sampler = "rsched.tegra" if os.environ.get("RS_GPU_SAMPLER") == "tegra" else "rsched.nvml"
+            cmd = [sys.executable, "-m", sampler, "--interval",
                    str(self.cfg.get("gpu_interval_s", 0.5)), "--log", str(self.out / "gpu.jsonl")]
             self.procs.append(self._spawn("gpu_sampler", cmd, cpus=self.infra_cpus))
         if not self.dry_run:
