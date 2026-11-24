@@ -80,11 +80,12 @@ for arm in arms:
     yaml.safe_dump(cfg, open(f"{out}/{arm}.yaml", "w"), sort_keys=False)
 PY
 
-if [[ ! -f "$ROOT/warmup/N8_r0/manifest.json" ]]; then
-  log "warm-up: 8 episodes on two replicas"
-  python -m rsched.sweep "$ROOT/configs/${ARMS[-1]}.yaml" --levels 8 --repeats 1 --episodes 8 --out "$ROOT/warmup" \
+WL="${X9_WARMUP_LEVEL:-${LEVELS[0]}}"   # the smallest level by default: fits wherever the sweep fits
+if [[ ! -f "$ROOT/warmup/N${WL}_r0/manifest.json" ]]; then
+  log "warm-up: 8 episodes at N=$WL"
+  python -m rsched.sweep "$ROOT/configs/${ARMS[-1]}.yaml" --levels "$WL" --repeats 1 --episodes 8 --out "$ROOT/warmup" \
     "${EPS_ARGS[@]}"
-  rm -rf "$ROOT/warmup/N8_r0/episodes"
+  rm -rf "$ROOT/warmup/N${WL}_r0/episodes"
 fi
 
 # every (arm, budget) pair is one "unit"; units rotate order across repeats
